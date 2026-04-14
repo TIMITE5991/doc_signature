@@ -812,15 +812,21 @@ export class SigningComponent implements OnInit {
               : String(err?.error?.message || err?.message || '');
         const msg = backendMessage.toLowerCase();
 
+        console.error('[Sign] status:', status, 'message:', backendMessage);
+
         if (status === 400 && msg.includes('déjà signé')) {
           this.step.set('already-signed');
           return;
         }
-        if (status === 400 && msg.includes('aucune signature sauvegardée')) {
+        if (status === 400 && (msg.includes('aucune signature sauvegardée') || msg.includes('aucune signature'))) {
           this.useSavedSignature.set(false);
           this.uploadedSignaturePreview.set(null);
           this.signatureMode.set('draw');
-          this.signErrorMessage.set('Aucune signature n\'est enregistrée dans votre profil. Ajoutez-en une dans Mon profil ou utilisez Dessiner / Télécharger image.');
+          this.signErrorMessage.set('Aucune signature enregistrée dans votre profil. Dessinez votre signature dans la zone ci-dessous ou importez un fichier image.');
+          return;
+        }
+        if (status === 400 && msg.includes('impossible d\'apposer')) {
+          this.signErrorMessage.set('Impossible d\'apposer la signature sur le document. Vérifiez que votre image de signature est valide (PNG recommandé).');
           return;
         }
         if (status === 401 || status === 404 || status === 410) {
@@ -834,7 +840,7 @@ export class SigningComponent implements OnInit {
           return;
         }
         if (status === 0) {
-          this.signErrorMessage.set('La requête n\'a pas abouti. Rechargez la page puis réessayez. Si le problème persiste, vérifiez que le backend est démarré.');
+          this.signErrorMessage.set('Impossible de joindre le serveur. Vérifiez que le backend est démarré et rechargez la page.');
           return;
         }
 
@@ -1048,8 +1054,11 @@ export class SigningComponent implements OnInit {
 
   setSignatureMode(mode: 'draw' | 'upload'): void {
     this.signatureMode.set(mode);
-    if (mode === 'draw') {
-      this.useSavedSignature.set(false);
+    // Toujours réinitialiser la signature sauvegardée quand on change de mode
+    this.useSavedSignature.set(false);
+    if (mode === 'upload') {
+      // Réinitialiser le preview pour forcer l'upload d'un nouveau fichier
+      this.uploadedSignaturePreview.set(null);
     }
     this.sigError.set(false);
   }

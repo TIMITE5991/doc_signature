@@ -228,19 +228,24 @@ export class EnvelopeFormComponent implements OnInit {
       expires_at:   this.form.value.expires_at || undefined,
     };
 
-    this.api.createEnvelope(payload).subscribe({
-      next: (env) => {
-        if (this.sendOnCreate) {
-          this.api.sendEnvelope(env.id_envelope).subscribe({
-            next: () => this.router.navigate(['/envelopes', env.id_envelope]),
-            error: (err) => { this.error.set(err.message); this.saving.set(false); },
-          });
-        } else {
+    if (this.sendOnCreate) {
+      // Un seul appel HTTP : créer + envoyer atomiquement
+      this.api.createAndSendEnvelope(payload).subscribe({
+        next: (env) => {
+          sessionStorage.setItem('envelope_flash', JSON.stringify({ type: 'success', msg: '✅ Enveloppe créée et envoyée avec succès !' }));
           this.router.navigate(['/envelopes', env.id_envelope]);
-        }
-      },
-      error: (err) => { this.error.set(err.message); this.saving.set(false); },
-    });
+        },
+        error: (err) => { this.error.set(err.message); this.saving.set(false); },
+      });
+    } else {
+      this.api.createEnvelope(payload).subscribe({
+        next: (env) => {
+          sessionStorage.setItem('envelope_flash', JSON.stringify({ type: 'success', msg: '💾 Brouillon enregistré avec succès.' }));
+          this.router.navigate(['/envelopes', env.id_envelope]);
+        },
+        error: (err) => { this.error.set(err.message); this.saving.set(false); },
+      });
+    }
   }
 
   cancel(): void { this.router.navigate(['/envelopes']); }

@@ -11,6 +11,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { PDFDocument } from 'pdf-lib';
 import sharp from 'sharp';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const sharpFn: typeof sharp = require('sharp');
 import * as JSZip from 'jszip';
 import { CreateEnvelopeDto, RejectEnvelopeDto, DelegateDto, ForwardRecipientDto } from './dto/envelope.dto';
 import { EmailService } from '../email/email.service';
@@ -117,6 +119,12 @@ export class EnvelopesService {
     }
   }
 
+  /** Créer + envoyer en une seule requête HTTP (évite le double aller-retour) */
+  async createAndSend(dto: CreateEnvelopeDto, userId: number) {
+    const envelope = await this.create(dto, userId);
+    return this.send(envelope.id_envelope, userId);
+  }
+
   async send(id: number, userId: number) {
     const envelope = await this.findById(id);
     if (envelope.created_by !== userId) {
@@ -142,14 +150,15 @@ export class EnvelopesService {
         .where('id_recipient', r.id_recipient)
         .update({ status: RecipientStatus.SENT });
 
-      await this.emailService.sendSignatureRequest(
+      // Fire-and-forget : ne pas bloquer la réponse HTTP sur l'envoi SMTP
+      this.emailService.sendSignatureRequest(
         r.email,
         `${r.first_name} ${r.last_name}`,
         envelope.title,
         senderName,
         r.token,
         envelope.message,
-      );
+      ).catch(err => console.error(`[Email] Échec envoi à ${r.email}:`, err));
 
       // Notifier le destinataire s'il est un utilisateur CGRAE enregistré
       const [recipientUser] = await this.db('t_users').where('email', r.email).select('id_user');
@@ -294,12 +303,12 @@ export class EnvelopesService {
 
     // Notify sender
     const [sender] = await this.db('t_users').where('id_user', envelope.created_by);
-    await this.emailService.sendSignatureConfirmation(
+    this.emailService.sendSignatureConfirmation(
       sender.email,
       `${sender.first_name} ${sender.last_name}`,
       envelope.title,
       `${recipient.first_name} ${recipient.last_name}`,
-    );
+    ).catch(err => console.error('[Email] sendSignatureConfirmation failed:', err));
 
     // Notifier l'émetteur dans l'application
     await this.notificationsService.create(
@@ -362,7 +371,7 @@ export class EnvelopesService {
         const sy = stampYRatio ?? 0.88;
         let stampPngBytes: Buffer = fs.readFileSync(stampPath);
         if (stampPath.endsWith('.jpg') || stampPath.endsWith('.jpeg')) {
-          stampPngBytes = await sharp(stampPath).png().toBuffer();
+          stampPngBytes = await sharpFn(stampPath).png().toBuffer();
         }
         const stampImg = await pdfDoc.embedPng(stampPngBytes);
         const stampWidth = pageWidth * 0.20;
@@ -377,16 +386,16 @@ export class EnvelopesService {
       const out = await pdfDoc.save();
       fs.writeFileSync(stampedPath, out);
     } else if ((doc.mime_type || '').startsWith('image/') || ['.png', '.jpg', '.jpeg'].includes(ext)) {
-      const base = sharp(doc.path);
+      const base = sharpFn(doc.path);
       const meta = await base.metadata();
       if (!meta.width || !meta.height) return;
 
       const sigTargetWidth = Math.round(meta.width * 0.22);
-      const sigBuf = await sharp(signaturePath)
+      const sigBuf = await sharpFn(signaturePath)
         .resize({ width: sigTargetWidth })
         .png()
         .toBuffer();
-      const sigMeta = await sharp(sigBuf).metadata();
+      const sigMeta = await sharpFn(sigBuf).metadata();
       const sigW = sigMeta.width || sigTargetWidth;
       const sigH = sigMeta.height || Math.round(sigTargetWidth * 0.35);
 
@@ -400,8 +409,8 @@ export class EnvelopesService {
         const sx = stampXRatio ?? 0.60;
         const sy = stampYRatio ?? 0.88;
         const stampW2 = Math.round(meta.width * 0.20);
-        const stBuf = await sharp(stampPath).resize({ width: stampW2 }).png().toBuffer();
-        const stMeta = await sharp(stBuf).metadata();
+        const stBuf = await sharpFn(stampPath).resize({ width: stampW2 }).png().toBuffer();
+        const stMeta = await sharpFn(stBuf).metadata();
         const stW = stMeta.width || stampW2;
         const stH = stMeta.height || stampW2;
         const stL = Math.min(Math.max(Math.round((sx * meta.width) - (stW / 2)), 0), meta.width - stW);
@@ -489,7 +498,7 @@ export class EnvelopesService {
       // Convertir en PNG si nécessaire
       let stBuf: Buffer = fs.readFileSync(stampPath);
       if (stampPath.endsWith('.jpg') || stampPath.endsWith('.jpeg')) {
-        stBuf = await sharp(stampPath).png().toBuffer();
+        stBuf = await sharpFn(stampPath).png().toBuffer();
       }
       const stMediaName = 'cachet_cgrae.png';
       const stRelId = 'rIdCgraeCachet';
@@ -531,13 +540,13 @@ export class EnvelopesService {
 
     const [sender] = await this.db('t_users').where('id_user', envelope.created_by);
 
-    await this.emailService.sendRejectionNotification(
+    this.emailService.sendRejectionNotification(
       sender.email,
       `${sender.first_name} ${sender.last_name}`,
       envelope.title,
       `${recipient.first_name} ${recipient.last_name}`,
       dto.reason,
-    );
+    ).catch(err => console.error('[Email] sendRejectionNotification failed:', err));
 
     await this.notificationsService.create(
       sender.id_user,
@@ -582,13 +591,13 @@ export class EnvelopesService {
 
     const [sender] = await this.db('t_users').where('id_user', env.created_by);
 
-    await this.emailService.sendSignatureRequest(
+    this.emailService.sendSignatureRequest(
       dto.delegate_email,
       `${dto.delegate_first_name} ${dto.delegate_last_name}`,
       env.title,
       `${sender.first_name} ${sender.last_name}`,
       newToken,
-    );
+    ).catch(err => console.error('[Email] sendSignatureRequest (delegate) failed:', err));
 
     await this.logAudit(recipient.id_envelope, 'SIGNATURE_DELEGATED', null, null, {
       from: recipient.email,
@@ -617,13 +626,13 @@ export class EnvelopesService {
 
     const [sender] = await this.db('t_users').where('id_user', envelope.created_by);
 
-    await this.emailService.sendReturnForCorrections(
+    this.emailService.sendReturnForCorrections(
       sender.email,
       `${sender.first_name} ${sender.last_name}`,
       envelope.title,
       `${recipient.first_name} ${recipient.last_name}`,
       reason,
-    );
+    ).catch(err => console.error('[Email] sendReturnForCorrections failed:', err));
 
     await this.notificationsService.create(
       envelope.created_by,
@@ -674,14 +683,14 @@ export class EnvelopesService {
     });
 
     const [sender] = await this.db('t_users').where('id_user', env.created_by);
-    await this.emailService.sendSignatureRequest(
+    this.emailService.sendSignatureRequest(
       dto.forward_email,
       `${dto.forward_first_name} ${dto.forward_last_name}`,
       env.title,
       `${sender.first_name} ${sender.last_name}`,
       newToken,
       env.message,
-    );
+    ).catch(err => console.error('[Email] sendSignatureRequest (forward) failed:', err));
 
     const [nextUser] = await this.db('t_users').where('email', dto.forward_email).select('id_user');
     if (nextUser) {
@@ -791,11 +800,13 @@ export class EnvelopesService {
         status: EnvelopeStatus.COMPLETED,
         completed_at: this.db.fn.now(),
       });
-      // Notify all
+      // Notify all (fire-and-forget)
       for (const r of allRecipients) {
-        await this.emailService.sendEnvelopeCompleted(r.email, `${r.first_name} ${r.last_name}`, env.title);
+        this.emailService.sendEnvelopeCompleted(r.email, `${r.first_name} ${r.last_name}`, env.title)
+          .catch(err => console.error('[Email] sendEnvelopeCompleted failed:', err));
       }
-      await this.emailService.sendEnvelopeCompleted(sender.email, `${sender.first_name} ${sender.last_name}`, env.title);
+      this.emailService.sendEnvelopeCompleted(sender.email, `${sender.first_name} ${sender.last_name}`, env.title)
+        .catch(err => console.error('[Email] sendEnvelopeCompleted (sender) failed:', err));
       await this.logAudit(envelopeId, 'ENVELOPE_COMPLETED', sender.id_user, null, {});
     } else if (env.circuit_type === 'SEQUENTIAL') {
       // Find next pending
@@ -810,13 +821,13 @@ export class EnvelopesService {
       );
       for (const r of nextRecipients) {
         await this.db('t_recipients').where('id_recipient', r.id_recipient).update({ status: RecipientStatus.SENT });
-        await this.emailService.sendSignatureRequest(
+        this.emailService.sendSignatureRequest(
           r.email,
           `${r.first_name} ${r.last_name}`,
           env.title,
           `${sender.first_name} ${sender.last_name}`,
           r.token,
-        );
+        ).catch(err => console.error('[Email] sendSignatureRequest (circuit) failed:', err));
         // Notifier le prochain signataire
         const [nextUser] = await this.db('t_users').where('email', r.email).select('id_user');
         if (nextUser) {

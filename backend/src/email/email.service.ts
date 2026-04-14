@@ -21,6 +21,8 @@ export class EmailService {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASSWORD,
       },
+      connectionTimeout: 5000,
+      socketTimeout: 10000,
     });
   }
 

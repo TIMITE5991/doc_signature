@@ -43,6 +43,14 @@ export class EnvelopesController {
     return this.envelopesService.create(dto, req.user.id_user);
   }
 
+  @Post('create-and-send')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Créer et envoyer une enveloppe en une seule requête' })
+  createAndSend(@Body() dto: CreateEnvelopeDto, @Request() req) {
+    return this.envelopesService.createAndSend(dto, req.user.id_user);
+  }
+
   @Post(':id/send')
   @UseGuards(JwtGuard)
   @ApiBearerAuth()

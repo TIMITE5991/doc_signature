@@ -130,6 +130,10 @@ export class ApiService {
     return this.http.post<Envelope>(`${this.base}/envelopes`, payload);
   }
 
+  createAndSendEnvelope(payload: any): Observable<Envelope> {
+    return this.http.post<Envelope>(`${this.base}/envelopes/create-and-send`, payload);
+  }
+
   sendEnvelope(id: number): Observable<Envelope> {
     return this.http.post<Envelope>(`${this.base}/envelopes/${id}/send`, {});
   }

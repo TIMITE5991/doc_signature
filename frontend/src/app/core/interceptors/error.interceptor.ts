@@ -14,9 +14,13 @@ export const errorInterceptor: HttpInterceptorFn = (req, next) => {
         auth.logout();
         router.navigate(['/auth/login']);
       }
-      const message =
-        err.error?.message || err.error?.error || 'Une erreur est survenue';
-      return throwError(() => new Error(Array.isArray(message) ? message.join(', ') : message));
+      const rawMessage = err.error?.message || err.error?.error || 'Une erreur est survenue';
+      const message = Array.isArray(rawMessage) ? rawMessage.join(', ') : String(rawMessage);
+      // Garder status HTTP + message user-friendly + error body original
+      const enriched = new Error(message) as any;
+      enriched.status = err.status;
+      enriched.error  = err.error;
+      return throwError(() => enriched);
     }),
   );
 };

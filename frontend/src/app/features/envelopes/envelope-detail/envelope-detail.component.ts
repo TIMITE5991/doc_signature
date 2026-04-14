@@ -1,6 +1,6 @@
 import { Component, ChangeDetectionStrategy, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { RouterLink, ActivatedRoute } from '@angular/router';
+import { RouterLink, ActivatedRoute, Router } from '@angular/router';
 import { ApiService } from '../../../core/services/api.service';
 import { AuthService } from '../../../core/services/auth.service';
 import { Envelope, AuditLog, Recipient } from '../../../core/models';
@@ -38,6 +38,10 @@ import { Envelope, AuditLog, Recipient } from '../../../core/models';
       </div>
     </div>
 
+    <div *ngIf="successMsg()" class="alert alert-success" style="display:flex;justify-content:space-between;align-items:center">
+      <span>{{ successMsg() }}</span>
+      <button type="button" style="background:none;border:none;cursor:pointer;font-size:16px" (click)="successMsg.set('')">✕</button>
+    </div>
     <div class="loading-center" *ngIf="loading()"><div class="spinner"></div></div>
     <div *ngIf="error()" class="alert alert-danger">{{ error() }}</div>
 
@@ -152,17 +156,31 @@ export class EnvelopeDetailComponent implements OnInit {
   loading      = signal(true);
   loadingAudit = signal(true);
   error        = signal('');
+  successMsg   = signal('');
   envelope     = signal<Envelope | null>(null);
   auditLogs    = signal<AuditLog[]>([]);
 
   constructor(
     private route: ActivatedRoute,
+    private router: Router,
     private api: ApiService,
     public auth: AuthService,
   ) {}
 
   ngOnInit(): void {
     const id = Number(this.route.snapshot.paramMap.get('id'));
+
+    // Lire et effacer le message flash (sessionStorage est fiable avec lazy-loading)
+    const flashRaw = sessionStorage.getItem('envelope_flash');
+    if (flashRaw) {
+      sessionStorage.removeItem('envelope_flash');
+      try {
+        const flash = JSON.parse(flashRaw) as { type: string; msg: string };
+        if (flash.type === 'success') this.successMsg.set(flash.msg);
+        else this.error.set(flash.msg);
+      } catch { /* ignore */ }
+    }
+
     this.api.getEnvelope(id).subscribe({
       next: (env) => { this.envelope.set(env); this.loading.set(false); },
       error: (err) => { this.error.set(err.message); this.loading.set(false); },

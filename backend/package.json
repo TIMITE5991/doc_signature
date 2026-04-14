@@ -5,6 +5,7 @@
   "scripts": {
     "build": "nest build",
     "start": "node dist/main",
+    "start:ts": "node node_modules/ts-node/dist/bin.js -T -r tsconfig-paths/register src/main.ts",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\"",

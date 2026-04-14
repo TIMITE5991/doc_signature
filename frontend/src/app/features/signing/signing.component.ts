@@ -122,12 +122,18 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
             <p>Aucun document attaché à cette enveloppe.</p>
           </div>
 
+          <!-- Zone overlay -->
           <div class="zone-overlay" *ngIf="activeDocUrl() && (isPdf() || isImage() || isDocx())"
             (click)="onViewerZoneClick($event)"
             (pointermove)="onOverlayPointerMove($event)"
             (pointerup)="onOverlayPointerUp()"
             (pointerleave)="onOverlayPointerUp()">
-            <div class="zone-hint-label">
+            <!-- Badge zone prédéfinie -->
+            <div *ngIf="hasPredefZone()" class="zone-predef-badge">
+              📌 Zone fixée par l'émetteur
+            </div>
+            <!-- Hint reposition (masqué si zone prédéfinie) -->
+            <div class="zone-hint-label" *ngIf="!hasPredefZone()">
               {{ zoneTarget() === 'stamp' ? '🏷 Cliquez pour placer le cachet' : '📍 Cliquez pour positionner votre signature' }}
             </div>
             <!-- Marqueur signature -->
@@ -177,7 +183,8 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
               <button type="button" class="btn btn-outline btn-sm" *ngIf="signatureMode() === 'draw'" (click)="clearCanvas()">🗑 Effacer</button>
               <button type="button" class="btn btn-outline btn-sm" *ngIf="signatureMode() === 'upload'" (click)="clearUploadedSignature()">🗑 Retirer</button>
             </div>
-            <p class="hint-text" style="margin-bottom:4px;">📍 Cliquez sur le document (gauche) pour repositionner la zone de signature.</p>
+            <p class="hint-text" style="margin-bottom:4px;" *ngIf="!hasPredefZone()">📍 Cliquez sur le document (gauche) pour repositionner la zone de signature.</p>
+            <p class="hint-text" style="margin-bottom:4px;background:#e8fff5;border:1px solid #a8e6c9;border-radius:6px;padding:6px 10px;" *ngIf="hasPredefZone()">📌 L'emplacement de votre signature a été fixé par l'émetteur du document.</p>
 
             <div class="sig-mode-switch">
               <button type="button" class="btn btn-outline btn-sm" [class.active]="signatureMode() === 'draw'" (click)="setSignatureMode('draw')">✍️ Dessiner (stylet/souris)</button>
@@ -185,7 +192,7 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
               <button type="button" class="btn btn-outline btn-sm" *ngIf="recipient()?.has_signature" (click)="useStoredSignature()">✍️ Ma signature</button>
             </div>
 
-            <div class="position-controls">
+            <div class="position-controls" *ngIf="!hasPredefZone()">
               <label>Position signature X: {{ sigXPercent() }}%</label>
               <input type="range" min="0" max="100" [value]="sigXPercent()" (input)="updateSigX($any($event.target).value)">
               <label>Position signature Y: {{ sigYPercent() }}%</label>
@@ -469,7 +476,12 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
     }
     .sig-zone-marker .zone-marker-label   { color: #e65100; }
     .stamp-zone-marker .zone-marker-label { color: #1565c0; }
-    @keyframes pulse-zone {
+    .zone-predef-badge {
+      position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+      background: rgba(10,124,78,0.9); color: #fff;
+      font-size: 11px; font-weight: 700; padding: 4px 12px;
+      border-radius: 20px; white-space: nowrap; pointer-events: none;
+    }
       0%,100% { box-shadow: 0 0 0 3px rgba(0,0,0,0.2), 0 2px 8px rgba(0,0,0,0.25); }
       50%      { box-shadow: 0 0 0 8px rgba(0,0,0,0.07), 0 2px 8px rgba(0,0,0,0.25); }
     }
@@ -600,6 +612,8 @@ export class SigningComponent implements OnInit {
   stampZone         = signal<{ x: number; y: number }>({ x: 0.60, y: 0.88 });
   zoneTarget        = signal<'signature' | 'stamp'>('signature');
   draggingTarget    = signal<'signature' | 'stamp' | null>(null);
+  /** true = zone définie par l'émetteur → l'aperçu est verrouillé */
+  hasPredefZone     = signal(false);
   year = new Date().getFullYear();
   token = '';
   sigComment = '';
@@ -639,6 +653,11 @@ export class SigningComponent implements OnInit {
         this.envelope.set(env);
         const r = env.recipients?.find(rec => rec.token === this.token) || null;
         this.recipient.set(r);
+        // Zone prédéfinie par l'émetteur
+        if (r?.sig_x_ratio != null && r?.sig_y_ratio != null) {
+          this.signatureZone.set({ x: Number(r.sig_x_ratio), y: Number(r.sig_y_ratio) });
+          this.hasPredefZone.set(true);
+        }
         // Initialiser le cachet
         if (r?.has_stamp) {
           this.hasStoredStamp.set(true);

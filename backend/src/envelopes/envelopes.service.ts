@@ -104,6 +104,9 @@ export class EnvelopesService {
           signing_order: r.signing_order,
           status: RecipientStatus.PENDING,
           token: uuidv4(),
+          sig_x_ratio: r.signature_zone?.x_ratio ?? null,
+          sig_y_ratio: r.signature_zone?.y_ratio ?? null,
+          sig_doc_id:  r.signature_zone?.doc_id  ?? null,
         });
       }
 
@@ -222,11 +225,15 @@ export class EnvelopesService {
     }
 
     if (sigFile) {
-      const targetDocId = signaturePosition?.doc_id
+      // Zone prédéfinie par l'émetteur (prioritaire sur la position choisie par le signataire)
+      const targetDocId = recipient.sig_doc_id
+        || signaturePosition?.doc_id
         || (await this.db('t_envelope_documents').where('id_envelope', envelope.id_envelope).first())?.id_document;
       if (targetDocId) {
-        const xRatio = Math.min(Math.max(signaturePosition?.x_ratio ?? 0.82, 0), 1);
-        const yRatio = Math.min(Math.max(signaturePosition?.y_ratio ?? 0.88, 0), 1);
+        const xRatio = Math.min(Math.max(
+          recipient.sig_x_ratio != null ? Number(recipient.sig_x_ratio) : (signaturePosition?.x_ratio ?? 0.82), 0), 1);
+        const yRatio = Math.min(Math.max(
+          recipient.sig_y_ratio != null ? Number(recipient.sig_y_ratio) : (signaturePosition?.y_ratio ?? 0.88), 0), 1);
 
         // Résoudre le chemin du cachet si demandé
         let resolvedStampPath: string | undefined;

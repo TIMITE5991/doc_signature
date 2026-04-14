@@ -28,6 +28,10 @@ export class RecipientDto {
   @ApiProperty({ example: 1, description: 'Ordre pour circuit séquentiel' })
   @IsNumber()
   signing_order: number;
+
+  @ApiProperty({ required: false, description: 'Zone de signature prédéfinie (x_ratio, y_ratio entre 0 et 1, doc_id optionnel)' })
+  @IsOptional()
+  signature_zone?: { x_ratio: number; y_ratio: number; doc_id?: number };
 }
 
 export class CreateEnvelopeDto {

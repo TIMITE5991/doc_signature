@@ -65,6 +65,10 @@ export interface Recipient {
   rejection_reason?: string;
   signing_comment?: string;
   signature_path?: string;
+  /** Zone de signature prédéfinie par l'émetteur */
+  sig_x_ratio?: number | null;
+  sig_y_ratio?: number | null;
+  sig_doc_id?: number | null;
 }
 
 export interface Envelope {

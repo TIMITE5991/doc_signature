@@ -1,0 +1,228 @@
+<div class="page-header">
+  <div>
+    <h1>Nouvelle enveloppe</h1>
+    <p>Configurez votre circuit de signature</p>
+  </div>
+</div>
+
+<div *ngIf="error()" class="alert alert-danger">{{ error() }}</div>
+<div *ngIf="submitted() && (form.invalid || recipientsArray.invalid || recipientsArray.length === 0 || selectedDocs().length === 0)" class="alert alert-danger">
+  Veuillez corriger les erreurs ci-dessous avant de soumettre.
+</div>
+
+<form [formGroup]="form" (ngSubmit)="submit()">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:start">
+
+    <!-- LEFT: envelope info -->
+    <div>
+      <div class="card mb-2">
+        <h3 class="section-title">Informations générales</h3>
+        <div class="form-group">
+          <label>Titre *</label>
+          <input type="text" formControlName="title" placeholder="Ex: Contrat de travail - Jean Dupont" />
+        </div>
+        <div class="form-group">
+          <label>Objet (affiché dans l'email)</label>
+          <input type="text" formControlName="subject" placeholder="Objet de l'email envoyé aux signataires" />
+        </div>
+        <div class="form-group">
+          <label>Message personnel</label>
+          <textarea formControlName="message" placeholder="Message affiché dans l'email de demande de signature..."></textarea>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-group">
+            <label>Type de circuit *</label>
+            <select formControlName="circuit_type">
+              <option value="SEQUENTIAL">Séquentiel</option>
+              <option value="PARALLEL">Parallèle</option>
+              <option value="MIXED">Mixte</option>
+              <option value="CONDITIONAL">Conditionnel</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Date d'expiration</label>
+            <input type="date" formControlName="expires_at" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Documents -->
+      <div class="card">
+        <h3 class="section-title">Documents à joindre</h3>
+        <div class="loading-center" *ngIf="loadingDocs()"><div class="spinner" style="width:24px;height:24px;border-width:2px"></div></div>
+        <div class="empty-state" style="padding:20px" *ngIf="!loadingDocs() && myDocs().length === 0">
+          <p>Aucun document disponible. <a [routerLink]="['/documents']">Ajouter des documents →</a></p>
+        </div>
+        <div *ngFor="let doc of myDocs()" class="doc-item">
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+            <input type="checkbox" [value]="doc.id_document" (change)="toggleDoc($event, doc.id_document)" />
+            <span style="font-size:13px">
+              <strong>{{ doc.original_name }}</strong>
+              <span style="color:var(--text-muted)"> – {{ formatSize(doc.size) }}</span>
+            </span>
+          </label>
+        </div>
+        <div class="error-msg mt-1" *ngIf="submitted() && selectedDocs().length === 0">
+          Sélectionnez au moins un document
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: recipients -->
+    <div class="card">
+      <div class="d-flex justify-between align-center mb-2">
+        <h3 class="section-title" style="margin:0">Destinataires</h3>
+        <button type="button" class="btn btn-outline btn-sm" (click)="addRecipient()">＋ Ajouter</button>
+      </div>
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px">
+        Seuls les emails &#64;cgrae.ci sont autorisés
+      </p>
+
+      <div class="error-msg mb-1" *ngIf="submitted() && recipients.length === 0">
+        Ajoutez au moins un destinataire
+      </div>
+
+      <div *ngFor="let r of recipients.controls; let i = index" class="recipient-card" [formGroup]="asFormGroup(r)">
+        <div class="recipient-header">
+          <span style="font-weight:600;font-size:13px">Destinataire {{ i + 1 }}</span>
+          <button type="button" class="btn-icon" (click)="removeRecipient(i)">✕</button>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div class="form-group" style="margin-bottom:8px">
+            <label>Prénom</label>
+            <input type="text" formControlName="first_name" placeholder="Prénom" />
+          </div>
+          <div class="form-group" style="margin-bottom:8px">
+            <label>Nom</label>
+            <input type="text" formControlName="last_name" placeholder="Nom" />
+          </div>
+        </div>
+        <div class="form-group" style="margin-bottom:8px">
+          <label>Email &#64;cgrae.ci</label>
+          <input type="email" formControlName="email" placeholder="nom.prenom&#64;cgrae.ci" />
+          <span class="error-msg" *ngIf="r.get('email')?.invalid && (r.get('email')?.touched || submitted())">
+            Email invalide — doit être &#64;cgrae.ci
+          </span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div class="form-group" style="margin-bottom:0">
+            <label>Rôle</label>
+            <select formControlName="role">
+              <option value="SIGNATORY">Signataire</option>
+              <option value="APPROVER">Approbateur</option>
+              <option value="VIEWER">Visualisateur</option>
+              <option value="DELEGATOR">Délégateur</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin-bottom:0">
+            <label>Ordre</label>
+            <input type="number" formControlName="signing_order" min="1" />
+          </div>
+        </div>
+      </div>
+
+      <div class="empty-state" style="padding:20px" *ngIf="recipients.length === 0">
+        <p>Ajoutez des destinataires pour définir le circuit</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ZONES DE SIGNATURE PRÉDÉFINIES -->
+  <div class="card zone-section" *ngIf="hasZones()">
+    <div class="zone-section-header">
+      <div>
+        <h3 class="section-title" style="margin-bottom:4px">
+          📍 Zones de signature prédéfinies
+          <span class="optional-badge">facultatif</span>
+        </h3>
+        <p style="font-size:12px;color:var(--text-muted);margin:0">
+          Cliquez sur l'aperçu du document pour fixer l'emplacement exact où chaque signataire doit apposer sa signature.
+          Si non défini, le signataire positionnera lui-même sa signature.
+        </p>
+      </div>
+    </div>
+
+    <div class="zone-layout">
+
+      <!-- Colonne gauche : liste des signataires -->
+      <div class="zone-recipients">
+        <p class="zone-col-label">Signataires / Approbateurs</p>
+        <div *ngFor="let i of signatoryIndices()"
+             class="zone-recipient-tab"
+             [class.active]="zoneRecipientIdx() === i"
+             (click)="zoneRecipientIdx.set(i)">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+              {{ getRecipientLabel(i) }}
+            </div>
+            <div *ngIf="hasZone(i)" class="zone-set-info">
+              ✅ {{ zonePercentX(i) }}% L · {{ zonePercentY(i) }}% H
+            </div>
+            <div *ngIf="!hasZone(i)" class="zone-unset-info">
+              Cliquez sur le doc →
+            </div>
+          </div>
+          <button *ngIf="hasZone(i)" type="button"
+                  class="zone-remove-btn"
+                  (click)="removeZone(i); $event.stopPropagation()"
+                  title="Supprimer la zone">✕</button>
+        </div>
+
+        <!-- Sélecteur de document si plusieurs -->
+        <div *ngIf="selectedDocs().length > 1" class="form-group mt-2" style="margin-bottom:0">
+          <label style="font-size:11px">Document cible</label>
+          <select (change)="setZoneDocForRecipient(zoneRecipientIdx(), +$any($event.target).value)">
+            <option *ngFor="let docId of selectedDocs(); let di = index" [value]="di">
+              {{ getDocName(docId) }}
+            </option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Colonne droite : aperçu du document avec overlay -->
+      <div class="zone-preview-col">
+        <div class="zone-preview-wrap" *ngIf="getZonePreviewDocUrl(zoneRecipientIdx()) as docUrl">
+          <iframe [src]="docUrl" class="zone-preview-iframe" title="Aperçu document"></iframe>
+
+          <!-- Overlay cliquable -->
+          <div class="zone-placer-overlay" (click)="onZonePlacerClick($event, zoneRecipientIdx())">
+            <div class="zone-placer-hint">
+              📍 Cliquez pour placer la zone de <strong>{{ getRecipientLabel(zoneRecipientIdx()) }}</strong>
+            </div>
+
+            <!-- Marqueur zone active -->
+            <div *ngIf="hasZone(zoneRecipientIdx())"
+                 class="zone-placed-marker"
+                 [style.left.%]="getZoneX(zoneRecipientIdx())"
+                 [style.top.%]="getZoneY(zoneRecipientIdx())">
+              <span class="zone-placed-label">✍ {{ getRecipientLabel(zoneRecipientIdx()) }}</span>
+            </div>
+
+            <!-- Marqueurs autres signataires (gris) -->
+            <ng-container *ngFor="let i of signatoryIndices()">
+              <div *ngIf="hasZone(i) && i !== zoneRecipientIdx()"
+                   class="zone-placed-marker zone-placed-marker-other"
+                   [style.left.%]="getZoneX(i)"
+                   [style.top.%]="getZoneY(i)">
+                <span class="zone-placed-label">{{ getRecipientLabel(i) }}</span>
+              </div>
+            </ng-container>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Actions -->
+  <div class="d-flex gap-2 justify-between mt-3">
+    <button type="button" class="btn btn-outline" (click)="cancel()">Annuler</button>
+    <div class="d-flex gap-1">
+      <button type="submit" class="btn btn-outline" [disabled]="saving()" (click)="sendOnCreate = false">
+        💾 Enregistrer brouillon
+      </button>
+      <button type="submit" class="btn btn-primary" [disabled]="saving()" (click)="sendOnCreate = true">
+        {{ saving() ? 'Envoi...' : '✉️ Créer et envoyer' }}
+      </button>
+    </div>
+  </div>
+</form>

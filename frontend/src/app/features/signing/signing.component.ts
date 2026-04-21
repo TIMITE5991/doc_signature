@@ -99,7 +99,7 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
           <div class="viewer-nav-bar">
             <div class="nav-label">Parcourir :</div>
             <input type="range" class="nav-slider" min="0" max="100" [value]="overviewPercent()" 
-              (input)="scrollToPercentage(0, $any($event.target).value)" 
+              (input)="scrollToPercentage(0, parseInt($any($event.target).value))" 
               title="Glissez pour naviguer dans le document" />
             <span class="nav-percent">{{ overviewPercent() }}%</span>
           </div>
@@ -875,17 +875,20 @@ export class SigningComponent implements OnInit {
   scrollToPercentage(x: number, y: number): void {
     const container = document.querySelector('.viewer-container') as HTMLElement;
     if (!container) return;
-    const maxX = container.scrollWidth - container.clientWidth;
-    const maxY = container.scrollHeight - container.clientHeight;
+    // Account for zoom by using actual scroll dimensions
+    const maxX = Math.max(0, container.scrollWidth - container.clientWidth);
+    const maxY = Math.max(0, container.scrollHeight - container.clientHeight);
     container.scrollLeft = (x / 100) * maxX;
     container.scrollTop = (y / 100) * maxY;
   }
 
-  // Navigate overview  
+  // Navigate overview - calculate scroll percentage
   overviewPercent(): number {
-    if (this.containerHeight() === 0) return 0;
-    const totalHeight = this.containerHeight() + (this.scrollY() / this.containerHeight()) * this.containerHeight();
-    return Math.round((this.scrollY() / totalHeight) * 100);
+    const container = document.querySelector('.viewer-container') as HTMLElement;
+    if (!container) return 0;
+    const maxScroll = Math.max(0, container.scrollHeight - container.clientHeight);
+    if (maxScroll === 0) return 0;  // No scrollable content
+    return Math.round((container.scrollTop / maxScroll) * 100);
   }
 
   toggleStamp(event: Event): void {

@@ -27,6 +27,15 @@ export class EnvelopeFormComponent implements OnInit {
   zoneRecipientIdx = signal(0);
   zoneDocMap       = signal<Map<number, number>>(new Map());
   sigZones         = signal<Map<number, { x_ratio: number; y_ratio: number; doc_id: number }>>(new Map());
+  // Zoom & Pan controls for preview
+  zoneZoom         = signal(100);
+  zonePanX         = signal(0);
+  zonePanY         = signal(0);
+  zonePanningMode  = signal(false);
+  zoneScrollX      = signal(0);
+  zoneScrollY      = signal(0);
+  zoneContainerW   = signal(0);
+  zoneContainerH   = signal(0);
 
   form = this.fb.group({
     title:        ['', Validators.required],
@@ -203,5 +212,60 @@ export class EnvelopeFormComponent implements OnInit {
         signature_zone: zone || undefined,
       };
     });
+  }
+
+  // ── Zone Preview Zoom/Pan ──────────────
+  zoneZoomIn(): void { this.zoneZoom.update(z => Math.min(z + 25, 300)); }
+  zoneZoomOut(): void { this.zoneZoom.update(z => Math.max(z - 25, 50)); }
+  zoneResetZoom(): void { this.zoneZoom.set(100); this.zonePanX.set(0); this.zonePanY.set(0); }
+  zoneTogglePanMode(): void { this.zonePanningMode.update(v => !v); }
+
+  onZonePreviewWheel(event: WheelEvent): void {
+    if (!event.ctrlKey && !event.metaKey) return;
+    event.preventDefault();
+    const delta = event.deltaY > 0 ? -25 : 25;
+    this.zoneZoom.update(z => Math.min(Math.max(z + delta, 50), 300));
+  }
+
+  onZonePreviewPan(event: PointerEvent, viewer: HTMLElement): void {
+    if (!this.zonePanningMode()) return;
+    if (event.button !== 0) return;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startPanX = this.zonePanX();
+    const startPanY = this.zonePanY();
+
+    const onMove = (e: PointerEvent) => {
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      this.zonePanX.set(startPanX + dx);
+      this.zonePanY.set(startPanY + dy);
+    };
+    const onEnd = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onEnd);
+    };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onEnd);
+  }
+
+  zoneOverviewPercent(): number {
+    if (this.zoneContainerH() === 0) return 0;
+    return Math.round((this.zoneScrollY() / (this.zoneContainerH() * 2)) * 100);
+  }
+
+  onZoneContainerScroll(event: Event): void {
+    const target = event.target as HTMLElement;
+    this.zoneScrollX.set(target.scrollLeft);
+    this.zoneScrollY.set(target.scrollTop);
+    this.zoneContainerW.set(target.clientWidth);
+    this.zoneContainerH.set(target.clientHeight);
+  }
+
+  zoneScrollToPercent(y: number): void {
+    const container = document.querySelector('.zone-preview-iframe-container') as HTMLElement;
+    if (!container) return;
+    const maxY = container.scrollHeight - container.clientHeight;
+    container.scrollTop = (y / 100) * maxY;
   }
 }

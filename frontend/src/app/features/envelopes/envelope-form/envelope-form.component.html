@@ -182,31 +182,57 @@
       <!-- Colonne droite : aperçu du document avec overlay -->
       <div class="zone-preview-col">
         <div class="zone-preview-wrap" *ngIf="getZonePreviewDocUrl(zoneRecipientIdx()) as docUrl">
-          <iframe [src]="docUrl" class="zone-preview-iframe" title="Aperçu document"></iframe>
+          <!-- Preview Header with Controls -->
+          <div class="zone-preview-header">
+            <button type="button" class="zone-ctrl-btn" [title]="zonePanningMode() ? 'Mode sélection' : 'Mode panoramique'" (click)="zoneTogglePanMode()" [class.active]="zonePanningMode()">
+              {{ zonePanningMode() ? '✏️' : '✋' }}
+            </button>
+            <button type="button" class="zone-ctrl-btn" (click)="zoneZoomOut()" [disabled]="zoneZoom() <= 50" title="Dézoomer">🔍−</button>
+            <span style="font-size:11px;font-weight:600;min-width:40px;text-align:center">{{ zoneZoom() }}%</span>
+            <button type="button" class="zone-ctrl-btn" (click)="zoneZoomIn()" [disabled]="zoneZoom() >= 300" title="Zoomer">🔍+</button>
+            <button type="button" class="zone-ctrl-btn" (click)="zoneResetZoom()" title="Réinitialiser">↺</button>
+          </div>
 
-          <!-- Overlay cliquable -->
-          <div class="zone-placer-overlay" (click)="onZonePlacerClick($event, zoneRecipientIdx())">
-            <div class="zone-placer-hint">
-              📍 Cliquez pour placer la zone de <strong>{{ getRecipientLabel(zoneRecipientIdx()) }}</strong>
-            </div>
+          <!-- Navigation Slider -->
+          <div class="zone-nav-bar">
+            <label style="font-size:11px;font-weight:600;white-space:nowrap">Parcourir:</label>
+            <input type="range" class="zone-nav-slider" min="0" max="100" [value]="zoneOverviewPercent()" 
+              (input)="zoneScrollToPercent($any($event.target).value)" />
+            <span style="font-size:11px;font-weight:600;min-width:35px;text-align:right;color:#0a7c4e">{{ zoneOverviewPercent() }}%</span>
+          </div>
 
-            <!-- Marqueur zone active -->
-            <div *ngIf="hasZone(zoneRecipientIdx())"
-                 class="zone-placed-marker"
-                 [style.left.%]="getZoneX(zoneRecipientIdx())"
-                 [style.top.%]="getZoneY(zoneRecipientIdx())">
-              <span class="zone-placed-label">✍ {{ getRecipientLabel(zoneRecipientIdx()) }}</span>
-            </div>
+          <!-- Preview Container with Zoom/Pan -->
+          <div class="zone-preview-iframe-container"
+            [style.transform]="'scale(' + (zoneZoom() / 100) + ') translate(' + zonePanX() + 'px, ' + zonePanY() + 'px)'"
+            (wheel)="onZonePreviewWheel($event)"
+            (scroll)="onZoneContainerScroll($event)"
+            (pointerdown)="onZonePreviewPan($event, $any($event.currentTarget))">
+            <iframe [src]="docUrl" class="zone-preview-iframe" title="Aperçu document"></iframe>
 
-            <!-- Marqueurs autres signataires (gris) -->
-            <ng-container *ngFor="let i of signatoryIndices()">
-              <div *ngIf="hasZone(i) && i !== zoneRecipientIdx()"
-                   class="zone-placed-marker zone-placed-marker-other"
-                   [style.left.%]="getZoneX(i)"
-                   [style.top.%]="getZoneY(i)">
-                <span class="zone-placed-label">{{ getRecipientLabel(i) }}</span>
+            <!-- Overlay cliquable -->
+            <div class="zone-placer-overlay" (click)="onZonePlacerClick($event, zoneRecipientIdx())" *ngIf="!zonePanningMode()">
+              <div class="zone-placer-hint">
+                📍 Cliquez pour placer la zone de <strong>{{ getRecipientLabel(zoneRecipientIdx()) }}</strong>
               </div>
-            </ng-container>
+
+              <!-- Marqueur zone active -->
+              <div *ngIf="hasZone(zoneRecipientIdx())"
+                   class="zone-placed-marker"
+                   [style.left.%]="getZoneX(zoneRecipientIdx())"
+                   [style.top.%]="getZoneY(zoneRecipientIdx())">
+                <span class="zone-placed-label">✍ {{ getRecipientLabel(zoneRecipientIdx()) }}</span>
+              </div>
+
+              <!-- Marqueurs autres signataires (gris) -->
+              <ng-container *ngFor="let i of signatoryIndices()">
+                <div *ngIf="hasZone(i) && i !== zoneRecipientIdx()"
+                     class="zone-placed-marker zone-placed-marker-other"
+                     [style.left.%]="getZoneX(i)"
+                     [style.top.%]="getZoneY(i)">
+                  <span class="zone-placed-label">{{ getRecipientLabel(i) }}</span>
+                </div>
+              </ng-container>
+            </div>
           </div>
         </div>
       </div>

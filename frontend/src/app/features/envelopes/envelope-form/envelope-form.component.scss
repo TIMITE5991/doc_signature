@@ -37,11 +37,51 @@
 .zone-remove-btn:hover { background: #fee2e2; }
 
 .zone-preview-col { position: relative; }
-.zone-preview-wrap { position: relative; border-radius: 8px; overflow: hidden; border: 1.5px solid var(--border); }
-.zone-preview-iframe { width: 100%; height: 480px; border: none; display: block; }
+.zone-preview-wrap { position: relative; border-radius: 8px; overflow: hidden; border: 1.5px solid var(--border); display: flex; flex-direction: column; height: 600px; }
+
+/* Preview Header Controls */
+.zone-preview-header {
+  display: flex; align-items: center; gap: 6px; background: #f4f6f8;
+  padding: 8px 10px; border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.zone-ctrl-btn {
+  padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border);
+  background: #fff; font-size: 11px; cursor: pointer; flex-shrink: 0;
+  &:hover:not(:disabled) { background: #e8f5f0; }
+  &.active { background: #0a7c4e; color: #fff; border-color: #0a7c4e; }
+  &:disabled { opacity: 0.4; cursor: not-allowed; }
+}
+
+/* Navigation Bar */
+.zone-nav-bar {
+  display: flex; align-items: center; gap: 8px; background: #f9fafb;
+  padding: 6px 10px; border-bottom: 1px solid var(--border);
+  font-size: 11px; color: var(--text-muted); flex-shrink: 0;
+}
+.zone-nav-slider {
+  flex: 1; min-width: 80px; height: 6px; border-radius: 3px;
+  cursor: pointer; appearance: none; -webkit-appearance: none;
+  background: #e5e7eb; outline: none;
+  &::-webkit-slider-thumb { appearance: none; -webkit-appearance: none;
+    width: 14px; height: 14px; border-radius: 50%; background: #0a7c4e;
+    border: 2px solid #fff; cursor: grab; box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  }
+  &::-moz-range-track { background: transparent; border: none; }
+  &::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%;
+    background: #0a7c4e; border: 2px solid #fff; cursor: grab; box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  }
+}
+
+/* Preview Container */
+.zone-preview-iframe-container {
+  flex: 1; overflow: auto; position: relative;
+  transform-origin: 0 0; transition: transform 0.1s ease-out;
+}
+.zone-preview-iframe { width: 100%; height: 100%; border: none; display: block; }
 .zone-placer-overlay {
   position: absolute; inset: 0; cursor: crosshair;
-  background: rgba(10,124,78,0.04);
+  background: rgba(10,124,78,0.04); pointer-events: auto;
 }
 .zone-placer-hint {
   position: absolute; top: 8px; left: 50%; transform: translateX(-50%);

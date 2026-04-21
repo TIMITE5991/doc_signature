@@ -105,52 +105,65 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
           </div>
 
           <!-- Viewer container avec zoom/pan -->
-          <div class="viewer-container"
+          <div class="viewer-container unified-viewer"
             [style.transform]="'scale(' + (zoom() / 100) + ') translate(' + panX() + 'px, ' + panY() + 'px)'"
             (wheel)="onDocumentWheel($event)"
             (scroll)="onViewerContainerScroll($event)"
             [class.pan-mode]="panningMode()">
 
+            <!-- Document type indicator -->
+            <div class="doc-type-badge" *ngIf="activeDocUrl()">
+              <span *ngIf="isPdf()">📑 PDF</span>
+              <span *ngIf="isImage()">🖼️ Image</span>
+              <span *ngIf="isDocx()">📝 Word</span>
+              <span *ngIf="isXlsx()">📊 Excel</span>
+            </div>
+
             <!-- PDF viewer intégré -->
-            <iframe *ngIf="activeDocUrl() && isPdf()"
-              [src]="activeDocUrl()!"
-              class="doc-iframe"
-              title="Visualiseur de document"
-              (pointerdown)="onDocumentPan($event, $any($event.currentTarget).parentElement)">
-            </iframe>
+            <div *ngIf="isPdf()" class="doc-wrapper pdf-wrapper" (pointerdown)="onDocumentPan($event, $any($event.currentTarget).parentElement)">
+              <iframe *ngIf="activeDocUrl()"
+                [src]="activeDocUrl()!"
+                class="doc-iframe"
+                title="Visualiseur PDF">
+              </iframe>
+              <div *ngIf="!activeDocUrl()" class="no-doc">PDF indisponible</div>
+            </div>
 
             <!-- Image viewer -->
-            <div *ngIf="activeDocUrl() && isImage()" class="img-viewer"
-              (pointerdown)="onDocumentPan($event, $any($event.currentTarget).parentElement)">
-              <img [src]="rawDocUrl()" alt="Document" />
+            <div *ngIf="isImage()" class="doc-wrapper img-wrapper" (pointerdown)="onDocumentPan($event, $any($event.currentTarget).parentElement)">
+              <div class="img-viewer" *ngIf="activeDocUrl()">
+                <img [src]="rawDocUrl()" alt="Document image" />
+              </div>
+              <div *ngIf="!activeDocUrl()" class="no-doc">Image indisponible</div>
             </div>
 
             <!-- DOCX viewer natif -->
-            <div *ngIf="isDocx()" class="docx-viewer"
-              (pointerdown)="onDocumentPan($event, $any($event.currentTarget).parentElement)">
-              <div #docxContainer class="docx-container"></div>
+            <div *ngIf="isDocx()" class="doc-wrapper docx-wrapper" (pointerdown)="onDocumentPan($event, $any($event.currentTarget).parentElement)">
+              <div class="loading-msg" *ngIf="!docxContainerRef">Chargement du document Word...</div>
+              <div #docxContainer class="docx-container" [style.minHeight]="'400px'"></div>
             </div>
 
-            <!-- XLSX viewer via SheetJS -->
-            <div *ngIf="isXlsx()" class="xlsx-viewer"
-              (pointerdown)="onDocumentPan($event, $any($event.currentTarget).parentElement)">
-              <div *ngIf="xlsxLoading()" style="padding:24px;color:#64748b">Chargement du fichier Excel...</div>
-              <div *ngIf="!xlsxLoading() && xlsxHtml()" [innerHTML]="xlsxHtml()" class="xlsx-table-wrap"></div>
-              <div *ngIf="!xlsxLoading() && !xlsxHtml()" class="no-doc">
-                <p>Impossible d'afficher ce fichier XLSX.</p>
-                <a class="btn btn-outline btn-sm" [href]="rawDocUrl()" target="_blank" rel="noopener">Télécharger le document</a>
+            <!-- XLSX viewer avec support multi-feuilles -->
+            <div *ngIf="isXlsx()" class="doc-wrapper xlsx-wrapper" (pointerdown)="onDocumentPan($event, $any($event.currentTarget).parentElement)">
+              <div class="loading-msg" *ngIf="xlsxLoading()">📊 Chargement du fichier Excel...</div>
+              <div *ngIf="!xlsxLoading() && xlsxHtml()" class="xlsx-table-wrap" [innerHTML]="xlsxHtml()"></div>
+              <div *ngIf="!xlsxLoading() && !xlsxHtml()" class="error-msg">
+                <p>❌ Impossible d'afficher ce fichier Excel</p>
+                <a class="btn btn-outline btn-sm" [href]="rawDocUrl()" target="_blank" rel="noopener">⬇ Télécharger</a>
               </div>
             </div>
 
-            <!-- Autres formats non supportés -->
-            <div class="no-doc" *ngIf="activeDocUrl() && !isPdf() && !isImage() && !isDocx() && !isXlsx()">
-              <p>Ce format ne peut pas être prévisualisé.</p>
-              <a class="btn btn-outline btn-sm" [href]="rawDocUrl()" target="_blank" rel="noopener">Télécharger le document</a>
+            <!-- Formats non supportés -->
+            <div class="doc-wrapper" *ngIf="activeDocUrl() && !isPdf() && !isImage() && !isDocx() && !isXlsx()">
+              <div class="error-msg">
+                <p>⚠️ Format non supporté</p>
+                <a class="btn btn-outline btn-sm" [href]="rawDocUrl()" target="_blank" rel="noopener">⬇ Télécharger</a>
+              </div>
             </div>
 
             <!-- Aucun document -->
-            <div class="no-doc" *ngIf="!activeDocUrl()">
-              <p>Aucun document attaché à cette enveloppe.</p>
+            <div class="doc-wrapper" *ngIf="!activeDocUrl()">
+              <div class="no-doc">📂 Aucun document</div>
             </div>
 
             <!-- Zone overlay -->

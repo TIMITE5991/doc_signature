@@ -99,7 +99,7 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
           <div class="viewer-nav-bar">
             <div class="nav-label">Parcourir :</div>
             <input type="range" class="nav-slider" min="0" max="100" [value]="overviewPercent()" 
-              (input)="scrollToPercentage(0, parseInt($any($event.target).value))" 
+              (change)="scrollToPercentage(0, parseInt($any($event.target).value))" 
               title="Glissez pour naviguer dans le document" />
             <span class="nav-percent">{{ overviewPercent() }}%</span>
           </div>
@@ -120,7 +120,7 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
             </div>
 
             <!-- PDF viewer intégré -->
-            <div *ngIf="isPdf()" class="doc-wrapper pdf-wrapper" (pointerdown)="onDocumentPan($event, $any($event.currentTarget).parentElement)">
+            <div *ngIf="isPdf()" class="doc-wrapper pdf-wrapper" (pointerdown)="onDocumentPan($event, $any($event.currentTarget).parentElement)" (scroll)="onViewerContainerScroll($event)">
               <iframe *ngIf="cachedSafeUrl()"
                 [src]="cachedSafeUrl()!"
                 class="doc-iframe"
@@ -130,7 +130,7 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
             </div>
 
             <!-- Image viewer -->
-            <div *ngIf="isImage()" class="doc-wrapper img-wrapper" (pointerdown)="onDocumentPan($event, $any($event.currentTarget).parentElement)">
+            <div *ngIf="isImage()" class="doc-wrapper img-wrapper" (pointerdown)="onDocumentPan($event, $any($event.currentTarget).parentElement)" (scroll)="onViewerContainerScroll($event)">
               <div class="img-viewer" *ngIf="cachedSafeUrl()">
                 <img [src]="cachedDocUrl()" alt="Document image" />
               </div>
@@ -138,13 +138,13 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
             </div>
 
             <!-- DOCX viewer natif -->
-            <div *ngIf="isDocx()" class="doc-wrapper docx-wrapper" (pointerdown)="onDocumentPan($event, $any($event.currentTarget).parentElement)">
+            <div *ngIf="isDocx()" class="doc-wrapper docx-wrapper" (pointerdown)="onDocumentPan($event, $any($event.currentTarget).parentElement)" (scroll)="onViewerContainerScroll($event)">
               <div class="loading-msg" *ngIf="!docxContainerRef">Chargement du document Word...</div>
               <div #docxContainer class="docx-container" [style.minHeight]="'400px'"></div>
             </div>
 
             <!-- XLSX viewer avec support multi-feuilles -->
-            <div *ngIf="isXlsx()" class="doc-wrapper xlsx-wrapper" (pointerdown)="onDocumentPan($event, $any($event.currentTarget).parentElement)">
+            <div *ngIf="isXlsx()" class="doc-wrapper xlsx-wrapper" (pointerdown)="onDocumentPan($event, $any($event.currentTarget).parentElement)" (scroll)="onViewerContainerScroll($event)">
               <div class="loading-msg" *ngIf="xlsxLoading()">📊 Chargement du fichier Excel...</div>
               <div *ngIf="!xlsxLoading() && xlsxHtml()" class="xlsx-table-wrap" [innerHTML]="xlsxHtml()"></div>
               <div *ngIf="!xlsxLoading() && !xlsxHtml()" class="error-msg">
@@ -873,22 +873,31 @@ export class SigningComponent implements OnInit {
   }
 
   scrollToPercentage(x: number, y: number): void {
-    const container = document.querySelector('.viewer-container') as HTMLElement;
-    if (!container) return;
-    // Account for zoom by using actual scroll dimensions
-    const maxX = Math.max(0, container.scrollWidth - container.clientWidth);
-    const maxY = Math.max(0, container.scrollHeight - container.clientHeight);
-    container.scrollLeft = (x / 100) * maxX;
-    container.scrollTop = (y / 100) * maxY;
+    // Try to find the actual scrollable element (could be .doc-wrapper or .viewer-container)
+    let scrollableEl = document.querySelector('.viewer-container .doc-wrapper') as HTMLElement;
+    if (!scrollableEl || scrollableEl.scrollHeight === scrollableEl.clientHeight) {
+      scrollableEl = document.querySelector('.viewer-container') as HTMLElement;
+    }
+    if (!scrollableEl) return;
+    
+    const maxX = Math.max(0, scrollableEl.scrollWidth - scrollableEl.clientWidth);
+    const maxY = Math.max(0, scrollableEl.scrollHeight - scrollableEl.clientHeight);
+    scrollableEl.scrollLeft = (x / 100) * maxX;
+    scrollableEl.scrollTop = (y / 100) * maxY;
   }
 
   // Navigate overview - calculate scroll percentage
   overviewPercent(): number {
-    const container = document.querySelector('.viewer-container') as HTMLElement;
-    if (!container) return 0;
-    const maxScroll = Math.max(0, container.scrollHeight - container.clientHeight);
-    if (maxScroll === 0) return 0;  // No scrollable content
-    return Math.round((container.scrollTop / maxScroll) * 100);
+    // Try to find the actual scrollable element
+    let scrollableEl = document.querySelector('.viewer-container .doc-wrapper') as HTMLElement;
+    if (!scrollableEl || scrollableEl.scrollHeight === scrollableEl.clientHeight) {
+      scrollableEl = document.querySelector('.viewer-container') as HTMLElement;
+    }
+    if (!scrollableEl) return this.scrollY() > 0 ? Math.round((this.scrollY() / (this.scrollY() + this.containerHeight())) * 100) : 0;
+    
+    const maxScroll = Math.max(0, scrollableEl.scrollHeight - scrollableEl.clientHeight);
+    if (maxScroll === 0) return 0;
+    return Math.round((scrollableEl.scrollTop / maxScroll) * 100);
   }
 
   toggleStamp(event: Event): void {

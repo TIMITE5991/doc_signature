@@ -85,39 +85,61 @@ import { Document } from '../../core/models';
     <div class="viewer-overlay" *ngIf="viewingDoc()" (click)="closeViewer()">
       <div class="viewer-modal" (click)="$event.stopPropagation()">
         <div class="viewer-header">
-          <span class="viewer-title">{{ viewingDoc()?.original_name }}</span>
+          <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0">
+            <span class="viewer-title">{{ viewingDoc()?.original_name }}</span>
+            <span class="doc-type-badge" *ngIf="viewingDoc()">
+              <span *ngIf="isPdfViewing()">📑 PDF</span>
+              <span *ngIf="isImageViewing()">🖼️ Image</span>
+              <span *ngIf="isDocxViewing()">📝 Word</span>
+              <span *ngIf="isXlsxViewing()">📊 Excel</span>
+            </span>
+          </div>
+          <!-- Viewer controls -->
+          <div class="viewer-controls" *ngIf="!viewerLoading() && (isPdfViewing() || isImageViewing())">
+            <button type="button" class="btn btn-outline btn-sm" (click)="viewerZoomOut()" [disabled]="viewerZoom() <= 50">🔍−</button>
+            <span style="font-size:12px;font-weight:600;min-width:40px;text-align:center">{{ viewerZoom() }}%</span>
+            <button type="button" class="btn btn-outline btn-sm" (click)="viewerZoomIn()" [disabled]="viewerZoom() >= 300">🔍+</button>
+            <button type="button" class="btn btn-outline btn-sm" (click)="viewerResetZoom()" title="Réinitialiser">↺</button>
+          </div>
           <div class="d-flex gap-1 align-center">
             <a [href]="api.getDocumentViewUrl(viewingDoc()!.id_document)" target="_blank"
-               rel="noopener" class="btn btn-outline btn-sm">⬇ Télécharger</a>
-            <button class="btn btn-outline btn-sm" (click)="closeViewer()">✕ Fermer</button>
+               rel="noopener" class="btn btn-outline btn-sm" title="Télécharger">⬇</a>
+            <button class="btn btn-outline btn-sm" (click)="closeViewer()" title="Fermer">✕</button>
           </div>
         </div>
         <div class="viewer-body">
           <div class="loading-center" *ngIf="viewerLoading()"><div class="spinner"></div></div>
 
           <!-- PDF -->
-          <iframe *ngIf="!viewerLoading() && isPdfViewing()"
-            [src]="viewerSafeUrl()!" class="viewer-iframe" title="PDF viewer"></iframe>
+          <div *ngIf="!viewerLoading() && isPdfViewing()" class="doc-wrapper pdf-wrapper"
+            [style.transform]="'scale(' + (viewerZoom() / 100) + ') translate(' + viewerPanX() + 'px, ' + viewerPanY() + 'px)'"
+            (wheel)="onViewerWheel($event)"
+            (scroll)="onViewerContainerScroll($event)">
+            <iframe [src]="viewerSafeUrl()!" class="viewer-iframe" title="Visionneuse PDF"></iframe>
+          </div>
 
           <!-- Image -->
-          <div *ngIf="!viewerLoading() && isImageViewing()" class="img-viewer-wrap">
+          <div *ngIf="!viewerLoading() && isImageViewing()" class="doc-wrapper img-wrapper"
+            [style.transform]="'scale(' + (viewerZoom() / 100) + ') translate(' + viewerPanX() + 'px, ' + viewerPanY() + 'px)'"
+            (wheel)="onViewerWheel($event)"
+            (scroll)="onViewerContainerScroll($event)">
             <img [src]="viewerBlobUrl()" [alt]="viewingDoc()?.original_name" class="viewer-img" />
           </div>
 
           <!-- DOCX -->
-          <div *ngIf="!viewerLoading() && isDocxViewing()" class="docx-wrap">
+          <div *ngIf="!viewerLoading() && isDocxViewing()" class="doc-wrapper docx-wrap">
             <div #docxContainer class="docx-inner"></div>
           </div>
 
           <!-- XLSX -->
-          <div *ngIf="!viewerLoading() && isXlsxViewing()" class="xlsx-wrap"
+          <div *ngIf="!viewerLoading() && isXlsxViewing()" class="doc-wrapper xlsx-wrap"
                [innerHTML]="xlsxHtml()"></div>
 
           <!-- Unsupported -->
-          <div *ngIf="!viewerLoading() && isUnsupportedViewing()" class="unsupported-wrap">
-            <p>📎 Ce type de fichier ne peut pas être affiché directement.</p>
+          <div *ngIf="!viewerLoading() && !isPdfViewing() && !isImageViewing() && !isDocxViewing() && !isXlsxViewing()" class="unsupported-wrap">
+            <p>📎 Ce type de fichier ne peut pas être affiché.</p>
             <a [href]="api.getDocumentViewUrl(viewingDoc()!.id_document)" target="_blank"
-               rel="noopener" class="btn btn-primary">⬇ Télécharger le fichier</a>
+               rel="noopener" class="btn btn-primary">⬇ Télécharger</a>
           </div>
         </div>
       </div>
@@ -137,20 +159,101 @@ import { Document } from '../../core/models';
     .viewer-header {
       display: flex; align-items: center; justify-content: space-between;
       padding: 14px 20px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+      position: relative;
     }
-    .viewer-title { font-weight: 600; font-size: 14px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; }
-    .viewer-body { flex: 1; overflow: auto; min-height: 0; }
-    .viewer-iframe { width: 100%; height: 75vh; border: none; display: block; }
-    .img-viewer-wrap { display: flex; align-items: center; justify-content: center; padding: 24px; }
-    .viewer-img { max-width: 100%; max-height: 70vh; object-fit: contain; border-radius: 4px; }
-    .docx-wrap { padding: 0; }
-    .docx-inner { padding: 32px; }
-    .xlsx-wrap { padding: 16px; overflow: auto; max-height: 75vh;
+    .doc-type-badge {
+      position: absolute; top: 50%; right: 72px; transform: translateY(-50%);
+      background: #f0f2f5; color: #1a1a1a; padding: 4px 10px;
+      border-radius: 16px; font-size: 12px; font-weight: 500;
+    }
+    .viewer-controls {
+      display: flex; align-items: center; gap: 8px; flex-shrink: 0;
+    }
+    .viewer-controls button {
+      display: flex; align-items: center; justify-content: center;
+      width: 32px; height: 32px; border: 1px solid var(--border);
+      background: #fff; border-radius: 6px; cursor: pointer;
+      font-size: 12px; font-weight: 500; color: var(--text-primary);
+      transition: all 0.2s ease;
+    }
+    .viewer-controls button:hover {
+      background: #f5f5f5; border-color: var(--text-muted);
+    }
+    .zoom-display {
+      display: flex; align-items: center; justify-content: center;
+      width: 50px; height: 32px; font-size: 12px; font-weight: 500;
+      color: var(--text-secondary);
+    }
+    .viewer-title {
+      font-weight: 600; font-size: 14px; color: var(--text-primary);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      max-width: 40%;
+    }
+    .viewer-body {
+      flex: 1; overflow: auto; min-height: 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .doc-wrapper {
+      display: flex; align-items: center; justify-content: center;
+      width: 100%; min-height: 100%;
+      transform-origin: 0 0;
+      transition: transform 0.1s ease-out;
+    }
+    .pdf-wrapper {
+      background: #f0f0f0; padding: 24px; display: flex;
+      align-items: center; justify-content: center;
+    }
+    .img-wrapper {
+      background: #f5f5f5; padding: 24px; display: flex;
+      align-items: center; justify-content: center;
+    }
+    .docx-wrap {
+      background: #fff; padding: 0; width: 100%;
+    }
+    .docx-inner {
+      padding: 32px; line-height: 1.6;
+    }
+    .xlsx-wrap {
+      background: #fff; padding: 16px; overflow: auto;
+      max-height: 100%;
       table { border-collapse: collapse; font-size: 13px; }
       td, th { border: 1px solid #ddd; padding: 6px 10px; }
       tr:nth-child(even) { background: #f9f9f9; }
     }
-    .unsupported-wrap { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 48px; color: var(--text-muted); }
+    .viewer-iframe {
+      width: 100%; height: 100%; border: none; display: block;
+    }
+    .img-viewer-wrap {
+      display: flex; align-items: center; justify-content: center;
+      width: 100%; height: 100%; padding: 0;
+    }
+    .viewer-img {
+      max-width: 100%; max-height: 100%;
+      object-fit: contain; border-radius: 4px;
+    }
+    .loading-msg {
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: 16px; padding: 48px;
+      color: var(--text-muted);
+    }
+    .loading-spinner {
+      width: 40px; height: 40px; border: 3px solid #e0e0e0;
+      border-top-color: var(--primary); border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .error-msg {
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: 16px; padding: 48px;
+      color: #d32f2f; text-align: center;
+    }
+    .unsupported-wrap {
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: 16px; padding: 48px;
+      color: var(--text-muted);
+    }
   `],
 })
 export class DocumentsComponent implements OnInit {
@@ -166,7 +269,15 @@ export class DocumentsComponent implements OnInit {
   viewerBlobUrl = signal<string>('');
   viewerSafeUrl = signal<SafeResourceUrl | null>(null);
   xlsxHtml      = signal<SafeHtml | null>(null);
+  // Viewer controls (zoom/pan)
+  viewerZoom    = signal(100);
+  viewerPanX    = signal(0);
+  viewerPanY    = signal(0);
+  viewerPanning = signal(false);
+  viewerScrollY = signal(0);
+  viewerHeight  = signal(0);
   @ViewChild('docxContainer') docxContainerRef?: ElementRef<HTMLDivElement>;
+  @ViewChild('fileInput') fileInputRef?: ElementRef<HTMLInputElement>;
 
   constructor(private api: ApiService, private sanitizer: DomSanitizer, private cdr: ChangeDetectorRef) {}
 
@@ -237,6 +348,11 @@ export class DocumentsComponent implements OnInit {
     const url = this.viewerBlobUrl();
     if (url) URL.revokeObjectURL(url);
     this.viewingDoc.set(null);
+    this.viewerZoom.set(100);
+    this.viewerPanX.set(0);
+    this.viewerPanY.set(0);
+    this.viewerPanning.set(false);
+    this.viewerScrollY.set(0);
   }
 
   isPdfViewing():        boolean { return this.viewingDoc()?.mime_type === 'application/pdf'; }
@@ -257,7 +373,8 @@ export class DocumentsComponent implements OnInit {
   }
 
   onFileChange(event: Event): void {
-    const file = (event.target as HTMLInputElement).files?.[0];
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
     if (!file) return;
     this.uploading.set(true);
     this.error.set('');
@@ -265,8 +382,20 @@ export class DocumentsComponent implements OnInit {
       next: (doc) => {
         this.documents.update(list => [doc, ...list]);
         this.uploading.set(false);
+        // Reset input file
+        input.value = '';
+        this.cdr.detectChanges();
       },
-      error: (err) => { this.error.set(err.message); this.uploading.set(false); },
+      error: (err) => {
+        this.error.set(err?.error?.message || err.message || 'Erreur lors du téléchargement');
+        this.uploading.set(false);
+        // Reset input file even on error
+        input.value = '';
+        this.cdr.detectChanges();
+      },
+      complete: () => {
+        this.uploading.set(false);
+      },
     });
   }
 
@@ -313,4 +442,46 @@ export class DocumentsComponent implements OnInit {
     };
     return map[mime] || mime;
   }
+
+  // ── Viewer zoom/pan controls ──────────────────────────────
+  viewerZoomIn(): void { this.viewerZoom.update(z => Math.min(z + 25, 300)); }
+  viewerZoomOut(): void { this.viewerZoom.update(z => Math.max(z - 25, 50)); }
+  viewerResetZoom(): void { this.viewerZoom.set(100); this.viewerPanX.set(0); this.viewerPanY.set(0); }
+  
+  onViewerWheel(event: WheelEvent): void {
+    if (!event.ctrlKey && !event.metaKey) return;
+    event.preventDefault();
+    const delta = event.deltaY > 0 ? -25 : 25;
+    this.viewerZoom.update(z => Math.min(Math.max(z + delta, 50), 300));
+  }
+
+  onViewerPan(event: PointerEvent, container: HTMLElement): void {
+    if (!this.viewerPanning()) {
+      this.viewerPanning.set(true);
+      this.lastPointerX = event.clientX;
+      this.lastPointerY = event.clientY;
+      return;
+    }
+  }
+
+  onViewerPointerMove(event: PointerEvent, container: HTMLElement): void {
+    if (!this.viewerPanning()) return;
+    const deltaX = event.clientX - (this.lastPointerX || 0);
+    const deltaY = event.clientY - (this.lastPointerY || 0);
+    this.viewerPanX.update(x => x + deltaX);
+    this.viewerPanY.update(y => y + deltaY);
+    this.lastPointerX = event.clientX;
+    this.lastPointerY = event.clientY;
+  }
+
+  onViewerPointerUp(): void { this.viewerPanning.set(false); }
+
+  onViewerContainerScroll(event: Event): void {
+    const container = event.target as HTMLElement;
+    this.viewerScrollY.set(container.scrollTop);
+    this.viewerHeight.set(container.clientHeight);
+  }
+
+  private lastPointerX = 0;
+  private lastPointerY = 0;
 }

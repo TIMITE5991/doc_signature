@@ -74,60 +74,81 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
         <!-- LEFT : visualiseur de document -->
         <div class="viewer-panel">
           <div class="viewer-header">
-            <span>📄 {{ displayDocName(activeDoc()?.original_name || 'Document') }}</span>
-            <div class="doc-tabs" *ngIf="envelope()!.documents.length > 1">
-              <button *ngFor="let doc of envelope()!.documents; let i = index"
-                [class.active]="activeDocIndex() === i"
-                (click)="selectDoc(i)" class="tab-btn">
-                Doc {{ i + 1 }}
+            <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0">
+              <span style="white-space:nowrap">📄 {{ displayDocName(activeDoc()?.original_name || 'Document') }}</span>
+              <div class="doc-tabs" *ngIf="envelope()!.documents.length > 1">
+                <button *ngFor="let doc of envelope()!.documents; let i = index"
+                  [class.active]="activeDocIndex() === i"
+                  (click)="selectDoc(i)" class="tab-btn">
+                  Doc {{ i + 1 }}
+                </button>
+              </div>
+            </div>
+            <div class="viewer-controls">
+              <button type="button" class="ctrl-btn" [title]="panningMode() ? 'Mode signature (Ctrl+Scroll pour zoom)' : 'Mode panoramique (Pan)'" (click)="togglePanMode()" [class.active]="panningMode()">
+                {{ panningMode() ? '✏️' : '✋' }}
               </button>
+              <button type="button" class="ctrl-btn" (click)="zoomOut()" [disabled]="zoom() <= 50" title="Dézoomer">🔍−</button>
+              <span style="font-size:12px;font-weight:600;min-width:45px;text-align:center">{{ zoom() }}%</span>
+              <button type="button" class="ctrl-btn" (click)="zoomIn()" [disabled]="zoom() >= 300" title="Zoomer">🔍+</button>
+              <button type="button" class="ctrl-btn" (click)="resetZoom()" title="Réinitialiser">↺</button>
             </div>
           </div>
 
-          <!-- PDF viewer intégré -->
-          <iframe *ngIf="activeDocUrl() && isPdf()"
-            [src]="activeDocUrl()!"
-            class="doc-iframe"
-            title="Visualiseur de document">
-          </iframe>
+          <!-- Viewer container avec zoom/pan -->
+          <div class="viewer-container"
+            [style.transform]="'scale(' + (zoom() / 100) + ') translate(' + panX() + 'px, ' + panY() + 'px)'"
+            (wheel)="onDocumentWheel($event)"
+            [class.pan-mode]="panningMode()">
 
-          <!-- Image viewer -->
-          <div *ngIf="activeDocUrl() && isImage()" class="img-viewer">
-            <img [src]="rawDocUrl()" alt="Document" />
-          </div>
+            <!-- PDF viewer intégré -->
+            <iframe *ngIf="activeDocUrl() && isPdf()"
+              [src]="activeDocUrl()!"
+              class="doc-iframe"
+              title="Visualiseur de document"
+              (pointerdown)="onDocumentPan($event, $any($event.currentTarget).parentElement)">
+            </iframe>
 
-          <!-- DOCX viewer natif -->
-          <div *ngIf="isDocx()" class="docx-viewer">
-            <div #docxContainer class="docx-container"></div>
-          </div>
+            <!-- Image viewer -->
+            <div *ngIf="activeDocUrl() && isImage()" class="img-viewer"
+              (pointerdown)="onDocumentPan($event, $any($event.currentTarget).parentElement)">
+              <img [src]="rawDocUrl()" alt="Document" />
+            </div>
 
-          <!-- XLSX viewer via SheetJS -->
-          <div *ngIf="isXlsx()" class="xlsx-viewer">
-            <div *ngIf="xlsxLoading()" style="padding:24px;color:#64748b">Chargement du fichier Excel...</div>
-            <div *ngIf="!xlsxLoading() && xlsxHtml()" [innerHTML]="xlsxHtml()" class="xlsx-table-wrap"></div>
-            <div *ngIf="!xlsxLoading() && !xlsxHtml()" class="no-doc">
-              <p>Impossible d'afficher ce fichier XLSX.</p>
+            <!-- DOCX viewer natif -->
+            <div *ngIf="isDocx()" class="docx-viewer"
+              (pointerdown)="onDocumentPan($event, $any($event.currentTarget).parentElement)">
+              <div #docxContainer class="docx-container"></div>
+            </div>
+
+            <!-- XLSX viewer via SheetJS -->
+            <div *ngIf="isXlsx()" class="xlsx-viewer"
+              (pointerdown)="onDocumentPan($event, $any($event.currentTarget).parentElement)">
+              <div *ngIf="xlsxLoading()" style="padding:24px;color:#64748b">Chargement du fichier Excel...</div>
+              <div *ngIf="!xlsxLoading() && xlsxHtml()" [innerHTML]="xlsxHtml()" class="xlsx-table-wrap"></div>
+              <div *ngIf="!xlsxLoading() && !xlsxHtml()" class="no-doc">
+                <p>Impossible d'afficher ce fichier XLSX.</p>
+                <a class="btn btn-outline btn-sm" [href]="rawDocUrl()" target="_blank" rel="noopener">Télécharger le document</a>
+              </div>
+            </div>
+
+            <!-- Autres formats non supportés -->
+            <div class="no-doc" *ngIf="activeDocUrl() && !isPdf() && !isImage() && !isDocx() && !isXlsx()">
+              <p>Ce format ne peut pas être prévisualisé.</p>
               <a class="btn btn-outline btn-sm" [href]="rawDocUrl()" target="_blank" rel="noopener">Télécharger le document</a>
             </div>
-          </div>
 
-          <!-- Autres formats non supportés -->
-          <div class="no-doc" *ngIf="activeDocUrl() && !isPdf() && !isImage() && !isDocx() && !isXlsx()">
-            <p>Ce format ne peut pas être prévisualisé.</p>
-            <a class="btn btn-outline btn-sm" [href]="rawDocUrl()" target="_blank" rel="noopener">Télécharger le document</a>
-          </div>
+            <!-- Aucun document -->
+            <div class="no-doc" *ngIf="!activeDocUrl()">
+              <p>Aucun document attaché à cette enveloppe.</p>
+            </div>
 
-          <!-- Aucun document -->
-          <div class="no-doc" *ngIf="!activeDocUrl()">
-            <p>Aucun document attaché à cette enveloppe.</p>
-          </div>
-
-          <!-- Zone overlay -->
-          <div class="zone-overlay" *ngIf="activeDocUrl() && (isPdf() || isImage() || isDocx())"
-            (click)="onViewerZoneClick($event)"
-            (pointermove)="onOverlayPointerMove($event)"
-            (pointerup)="onOverlayPointerUp()"
-            (pointerleave)="onOverlayPointerUp()">
+            <!-- Zone overlay -->
+            <div class="zone-overlay" *ngIf="activeDocUrl() && (isPdf() || isImage() || isDocx())"
+              (click)="onViewerZoneClick($event)"
+              (pointermove)="onOverlayPointerMove($event)"
+              (pointerup)="onOverlayPointerUp()"
+              (pointerleave)="onOverlayPointerUp()">
             <!-- Badge zone prédéfinie -->
             <div *ngIf="hasPredefZone()" class="zone-predef-badge">
               📌 Zone fixée par l'émetteur
@@ -138,8 +159,8 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
             </div>
             <!-- Marqueur signature -->
             <div class="zone-marker sig-zone-marker"
-              [style.left.%]="(signatureZone()?.x ?? 0.82) * 100"
-              [style.top.%]="(signatureZone()?.y ?? 0.88) * 100"
+              [style.left.%]="(signatureZone()?.x ?? 0.15) * 100"
+              [style.top.%]="(signatureZone()?.y ?? 0.90) * 100"
               (pointerdown)="startDragMarker('signature', $event)">
               <span class="zone-marker-label">✍ Signature</span>
             </div>
@@ -149,6 +170,7 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
               [style.top.%]="stampZone().y * 100"
               (pointerdown)="startDragMarker('stamp', $event)">
               <span class="zone-marker-label">🏷 Cachet</span>
+            </div>
             </div>
           </div>
         </div>
@@ -431,15 +453,30 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
       display: flex; flex-direction: column; position: relative;
     }
     .viewer-header {
-      display: flex; align-items: center; justify-content: space-between;
-      background: #f4f6f8; padding: 10px 16px; font-size: 13px; font-weight: 600;
-      color: var(--text-secondary); border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      background: #f4f6f8; padding: 10px 12px; font-size: 13px; font-weight: 600;
+      color: var(--text-secondary); border-bottom: 1px solid var(--border); flex-wrap: wrap;
+    }
+    .viewer-controls {
+      display: flex; align-items: center; gap: 4px; flex-shrink: 0;
+    }
+    .ctrl-btn {
+      padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border);
+      background: #fff; font-size: 12px; cursor: pointer; flex-shrink: 0;
+      &:hover:not(:disabled) { background: #e8f5f0; }
+      &.active { background: #0a7c4e; color: #fff; border-color: #0a7c4e; }
+      &:disabled { opacity: 0.4; cursor: not-allowed; }
     }
     .doc-tabs { display: flex; gap: 4px; }
     .tab-btn {
       padding: 4px 10px; border-radius: 4px; border: 1px solid var(--border);
       background: #fff; font-size: 12px; cursor: pointer;
       &.active { background: #0a7c4e; color: #fff; border-color: #0a7c4e; }
+    }
+    .viewer-container {
+      position: relative; flex: 1; overflow: auto;
+      transform-origin: 0 0; transition: transform 0.1s ease-out;
+      &.pan-mode { cursor: grab; &:active { cursor: grabbing; } }
     }
     .doc-iframe { width: 100%; height: calc(100vh - 200px); min-height: 500px; border: none; display: block; }
     .img-viewer { padding: 16px; text-align: center; img { max-width: 100%; border-radius: 8px; } }
@@ -449,7 +486,7 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
     .xlsx-table-wrap { padding: 16px; table { border-collapse: collapse; font-size: 13px; } td, th { border: 1px solid #ddd; padding: 5px 10px; } tr:nth-child(even) { background: #f9f9f9; } }
     .no-doc { padding: 60px 20px; text-align: center; color: var(--text-muted); }
     .zone-overlay {
-      position: absolute; inset: 44px 0 0 0; cursor: crosshair;
+      position: absolute; inset: 0; cursor: crosshair;
       pointer-events: auto;
     }
     .zone-hint-label {
@@ -482,6 +519,7 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
       font-size: 11px; font-weight: 700; padding: 4px 12px;
       border-radius: 20px; white-space: nowrap; pointer-events: none;
     }
+    @keyframes pulse-zone {
       0%,100% { box-shadow: 0 0 0 3px rgba(0,0,0,0.2), 0 2px 8px rgba(0,0,0,0.25); }
       50%      { box-shadow: 0 0 0 8px rgba(0,0,0,0.07), 0 2px 8px rgba(0,0,0,0.25); }
     }
@@ -609,11 +647,16 @@ export class SigningComponent implements OnInit {
   useStamp          = signal(false);
   hasStoredStamp    = signal(false);
   uploadedStampPreview = signal<string | null>(null);
-  stampZone         = signal<{ x: number; y: number }>({ x: 0.60, y: 0.88 });
+  stampZone         = signal<{ x: number; y: number }>({ x: 0.50, y: 0.90 });
   zoneTarget        = signal<'signature' | 'stamp'>('signature');
   draggingTarget    = signal<'signature' | 'stamp' | null>(null);
   /** true = zone définie par l'émetteur → l'aperçu est verrouillé */
   hasPredefZone     = signal(false);
+  // Zoom & Pan controls
+  zoom              = signal(100);
+  panX              = signal(0);
+  panY              = signal(0);
+  panningMode       = signal(false);
   year = new Date().getFullYear();
   token = '';
   sigComment = '';
@@ -781,8 +824,8 @@ export class SigningComponent implements OnInit {
     const position = (needsSignature && activeDocId)
       ? {
           doc_id: activeDocId,
-          x_ratio: this.signatureZone()?.x ?? 0.82,
-          y_ratio: this.signatureZone()?.y ?? 0.88,
+          x_ratio: this.signatureZone()?.x ?? 0.15,
+          y_ratio: this.signatureZone()?.y ?? 0.90,
         }
       : undefined;
     // Cachet
@@ -920,18 +963,18 @@ export class SigningComponent implements OnInit {
     this.draggingTarget.set(null);
   }
 
-  sigXPercent(): number { return Math.round((this.signatureZone()?.x ?? 0.82) * 100); }
-  sigYPercent(): number { return Math.round((this.signatureZone()?.y ?? 0.88) * 100); }
+  sigXPercent(): number { return Math.round((this.signatureZone()?.x ?? 0.15) * 100); }
+  sigYPercent(): number { return Math.round((this.signatureZone()?.y ?? 0.90) * 100); }
   stampXPercent(): number { return Math.round(this.stampZone().x * 100); }
   stampYPercent(): number { return Math.round(this.stampZone().y * 100); }
 
   updateSigX(v: string): void {
-    const cur = this.signatureZone() ?? { x: 0.82, y: 0.88 };
+    const cur = this.signatureZone() ?? { x: 0.15, y: 0.90 };
     this.signatureZone.set({ ...cur, x: Math.min(Math.max(Number(v) / 100, 0), 1) });
   }
 
   updateSigY(v: string): void {
-    const cur = this.signatureZone() ?? { x: 0.82, y: 0.88 };
+    const cur = this.signatureZone() ?? { x: 0.15, y: 0.90 };
     this.signatureZone.set({ ...cur, y: Math.min(Math.max(Number(v) / 100, 0), 1) });
   }
 
@@ -941,6 +984,45 @@ export class SigningComponent implements OnInit {
 
   updateStampY(v: string): void {
     this.stampZone.set({ ...this.stampZone(), y: Math.min(Math.max(Number(v) / 100, 0), 1) });
+  }
+
+  // ── Zoom & Pan ────────────────────────────────
+  zoomIn(): void { this.zoom.update(z => Math.min(z + 25, 300)); }
+  zoomOut(): void { this.zoom.update(z => Math.max(z - 25, 50)); }
+  resetZoom(): void { this.zoom.set(100); this.panX.set(0); this.panY.set(0); }
+  togglePanMode(): void { this.panningMode.update(v => !v); }
+
+  onDocumentWheel(event: WheelEvent): void {
+    if (!event.ctrlKey && !event.metaKey) return;
+    event.preventDefault();
+    const delta = event.deltaY > 0 ? -25 : 25;
+    this.zoom.update(z => Math.min(Math.max(z + delta, 50), 300));
+  }
+
+  onDocumentPan(event: PointerEvent, viewer: HTMLElement): void {
+    if (!this.panningMode()) {
+      this.onViewerZoneClick(event as any);
+      return;
+    }
+    if (event.button !== 0) return;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startPanX = this.panX();
+    const startPanY = this.panY();
+    const rect = viewer.getBoundingClientRect();
+
+    const onMove = (e: PointerEvent) => {
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      this.panX.set(startPanX + dx);
+      this.panY.set(startPanY + dy);
+    };
+    const onEnd = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onEnd);
+    };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onEnd);
   }
 
   toggleStamp(event: Event): void {

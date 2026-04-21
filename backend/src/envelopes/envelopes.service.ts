@@ -231,14 +231,14 @@ export class EnvelopesService {
         || (await this.db('t_envelope_documents').where('id_envelope', envelope.id_envelope).first())?.id_document;
       if (targetDocId) {
         const xRatio = Math.min(Math.max(
-          recipient.sig_x_ratio != null ? Number(recipient.sig_x_ratio) : (signaturePosition?.x_ratio ?? 0.82), 0), 1);
+          recipient.sig_x_ratio != null ? Number(recipient.sig_x_ratio) : (signaturePosition?.x_ratio ?? 0.15), 0), 1);
         const yRatio = Math.min(Math.max(
-          recipient.sig_y_ratio != null ? Number(recipient.sig_y_ratio) : (signaturePosition?.y_ratio ?? 0.88), 0), 1);
+          recipient.sig_y_ratio != null ? Number(recipient.sig_y_ratio) : (signaturePosition?.y_ratio ?? 0.90), 0), 1);
 
         // Résoudre le chemin du cachet si demandé
         let resolvedStampPath: string | undefined;
-        let stampX = 0.60;
-        let stampY = 0.88;
+        let stampX = 0.50;
+        let stampY = 0.90;
         if (useStamp) {
           if (stampImage && stampImage.startsWith('data:image/')) {
             // Cachet fourni inline — sauvegarder comme cachet permanent de l'utilisateur
@@ -374,8 +374,8 @@ export class EnvelopesService {
 
       // Cachet (tampon officiel)
       if (stampPath && fs.existsSync(stampPath)) {
-        const sx = stampXRatio ?? 0.60;
-        const sy = stampYRatio ?? 0.88;
+        const sx = stampXRatio ?? 0.50;
+        const sy = stampYRatio ?? 0.90;
         let stampPngBytes: Buffer = fs.readFileSync(stampPath);
         if (stampPath.endsWith('.jpg') || stampPath.endsWith('.jpeg')) {
           stampPngBytes = await sharpFn(stampPath).png().toBuffer();
@@ -413,8 +413,8 @@ export class EnvelopesService {
 
       // Cachet
       if (stampPath && fs.existsSync(stampPath)) {
-        const sx = stampXRatio ?? 0.60;
-        const sy = stampYRatio ?? 0.88;
+        const sx = stampXRatio ?? 0.50;
+        const sy = stampYRatio ?? 0.90;
         const stampW2 = Math.round(meta.width * 0.20);
         const stBuf = await sharpFn(stampPath).resize({ width: stampW2 }).png().toBuffer();
         const stMeta = await sharpFn(stBuf).metadata();

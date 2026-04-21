@@ -95,10 +95,20 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
             </div>
           </div>
 
+          <!-- Navigation bar -->
+          <div class="viewer-nav-bar">
+            <div class="nav-label">Parcourir :</div>
+            <input type="range" class="nav-slider" min="0" max="100" [value]="overviewPercent()" 
+              (input)="scrollToPercentage(0, $any($event.target).value)" 
+              title="Glissez pour naviguer dans le document" />
+            <span class="nav-percent">{{ overviewPercent() }}%</span>
+          </div>
+
           <!-- Viewer container avec zoom/pan -->
           <div class="viewer-container"
             [style.transform]="'scale(' + (zoom() / 100) + ') translate(' + panX() + 'px, ' + panY() + 'px)'"
             (wheel)="onDocumentWheel($event)"
+            (scroll)="onViewerContainerScroll($event)"
             [class.pan-mode]="panningMode()">
 
             <!-- PDF viewer intégré -->
@@ -457,6 +467,29 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
       background: #f4f6f8; padding: 10px 12px; font-size: 13px; font-weight: 600;
       color: var(--text-secondary); border-bottom: 1px solid var(--border); flex-wrap: wrap;
     }
+    .viewer-nav-bar {
+      display: flex; align-items: center; gap: 8px; background: #f9fafb; padding: 8px 12px;
+      border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text-muted);
+    }
+    .nav-label { font-weight: 600; white-space: nowrap; }
+    .nav-slider {
+      flex: 1; min-width: 100px; height: 6px; border-radius: 3px;
+      cursor: pointer; appearance: none; -webkit-appearance: none;
+      background: #e5e7eb; outline: none;
+      &::-webkit-slider-thumb { appearance: none; -webkit-appearance: none;
+        width: 16px; height: 16px; border-radius: 50%; background: #0a7c4e;
+        border: 2px solid #fff; cursor: grab; box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        transition: all 0.2s;
+      }
+      &::-webkit-slider-thumb:hover { background: #065c39; transform: scale(1.1); }
+      &::-moz-range-track { background: transparent; border: none; }
+      &::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%;
+        background: #0a7c4e; border: 2px solid #fff; cursor: grab; box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        transition: all 0.2s;
+      }
+      &::-moz-range-thumb:hover { background: #065c39; transform: scale(1.1); }
+    }
+    .nav-percent { min-width: 40px; text-align: right; font-weight: 600; color: #0a7c4e; }
     .viewer-controls {
       display: flex; align-items: center; gap: 4px; flex-shrink: 0;
     }
@@ -657,6 +690,13 @@ export class SigningComponent implements OnInit {
   panX              = signal(0);
   panY              = signal(0);
   panningMode       = signal(false);
+  // Document navigation for scrolling
+  scrollX           = signal(0);
+  scrollY           = signal(0);
+  containerWidth    = signal(0);
+  containerHeight   = signal(0);
+  docWidth          = signal(0);
+  docHeight         = signal(0);
   year = new Date().getFullYear();
   token = '';
   sigComment = '';
@@ -1023,6 +1063,31 @@ export class SigningComponent implements OnInit {
     };
     document.addEventListener('pointermove', onMove);
     document.addEventListener('pointerup', onEnd);
+  }
+
+  // ── Document Navigation ────────────────────────
+  onViewerContainerScroll(event: Event): void {
+    const target = event.target as HTMLElement;
+    this.scrollX.set(target.scrollLeft);
+    this.scrollY.set(target.scrollTop);
+    this.containerWidth.set(target.clientWidth);
+    this.containerHeight.set(target.clientHeight);
+  }
+
+  scrollToPercentage(x: number, y: number): void {
+    const container = document.querySelector('.viewer-container') as HTMLElement;
+    if (!container) return;
+    const maxX = container.scrollWidth - container.clientWidth;
+    const maxY = container.scrollHeight - container.clientHeight;
+    container.scrollLeft = (x / 100) * maxX;
+    container.scrollTop = (y / 100) * maxY;
+  }
+
+  // Navigate overview  
+  overviewPercent(): number {
+    if (this.containerHeight() === 0) return 0;
+    const totalHeight = this.containerHeight() + (this.scrollY() / this.containerHeight()) * this.containerHeight();
+    return Math.round((this.scrollY() / totalHeight) * 100);
   }
 
   toggleStamp(event: Event): void {

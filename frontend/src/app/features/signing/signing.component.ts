@@ -112,7 +112,7 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
             [class.pan-mode]="panningMode()">
 
             <!-- Document type indicator -->
-            <div class="doc-type-badge" *ngIf="activeDocUrl()">
+            <div class="doc-type-badge" *ngIf="cachedSafeUrl()">
               <span *ngIf="isPdf()">📑 PDF</span>
               <span *ngIf="isImage()">🖼️ Image</span>
               <span *ngIf="isDocx()">📝 Word</span>
@@ -121,20 +121,20 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
 
             <!-- PDF viewer intégré -->
             <div *ngIf="isPdf()" class="doc-wrapper pdf-wrapper" (pointerdown)="onDocumentPan($event, $any($event.currentTarget).parentElement)">
-              <iframe *ngIf="activeDocUrl()"
-                [src]="activeDocUrl()!"
+              <iframe *ngIf="cachedSafeUrl()"
+                [src]="cachedSafeUrl()!"
                 class="doc-iframe"
                 title="Visualiseur PDF">
               </iframe>
-              <div *ngIf="!activeDocUrl()" class="no-doc">PDF indisponible</div>
+              <div *ngIf="!cachedSafeUrl()" class="no-doc">PDF indisponible</div>
             </div>
 
             <!-- Image viewer -->
             <div *ngIf="isImage()" class="doc-wrapper img-wrapper" (pointerdown)="onDocumentPan($event, $any($event.currentTarget).parentElement)">
-              <div class="img-viewer" *ngIf="activeDocUrl()">
-                <img [src]="rawDocUrl()" alt="Document image" />
+              <div class="img-viewer" *ngIf="cachedSafeUrl()">
+                <img [src]="cachedDocUrl()" alt="Document image" />
               </div>
-              <div *ngIf="!activeDocUrl()" class="no-doc">Image indisponible</div>
+              <div *ngIf="!cachedSafeUrl()" class="no-doc">Image indisponible</div>
             </div>
 
             <!-- DOCX viewer natif -->
@@ -154,7 +154,7 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
             </div>
 
             <!-- Formats non supportés -->
-            <div class="doc-wrapper" *ngIf="activeDocUrl() && !isPdf() && !isImage() && !isDocx() && !isXlsx()">
+            <div class="doc-wrapper" *ngIf="cachedSafeUrl() && !isPdf() && !isImage() && !isDocx() && !isXlsx()">
               <div class="error-msg">
                 <p>⚠️ Format non supporté</p>
                 <a class="btn btn-outline btn-sm" [href]="rawDocUrl()" target="_blank" rel="noopener">⬇ Télécharger</a>
@@ -162,12 +162,12 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
             </div>
 
             <!-- Aucun document -->
-            <div class="doc-wrapper" *ngIf="!activeDocUrl()">
+            <div class="doc-wrapper" *ngIf="!cachedSafeUrl()">
               <div class="no-doc">📂 Aucun document</div>
             </div>
 
             <!-- Zone overlay -->
-            <div class="zone-overlay" *ngIf="activeDocUrl() && (isPdf() || isImage() || isDocx())"
+            <div class="zone-overlay" *ngIf="cachedSafeUrl() && (isPdf() || isImage() || isDocx())"
               (click)="onViewerZoneClick($event)"
               (pointermove)="onOverlayPointerMove($event)"
               (pointerup)="onOverlayPointerUp()"
@@ -461,6 +461,9 @@ export class SigningComponent implements OnInit {
   uploadedSignaturePreview = signal<string | null>(null);
   useSavedSignature = signal(false);
   activeDocIndex = signal(0);
+  // Cached URLs to prevent flickering (memoized)
+  cachedDocUrl = signal<string>('');
+  cachedSafeUrl = signal<SafeResourceUrl | null>(null);
   signatureZone = signal<{ x: number; y: number } | null>(null);
   xlsxHtml    = signal<SafeHtml | null>(null);
   xlsxLoading = signal(false);
@@ -541,6 +544,10 @@ export class SigningComponent implements OnInit {
           this.step.set('already-signed');
         } else {
           this.step.set('sign');
+          // Initialize cached URL for first document
+          const url = this.rawDocUrl();
+          this.cachedDocUrl.set(url);
+          this.cachedSafeUrl.set(url ? this.sanitizer.bypassSecurityTrustResourceUrl(url) : null);
           this.cdr.detectChanges();
           setTimeout(() => { this.renderDocxPreviewIfNeeded(); this.renderXlsxIfNeeded(); }, 50);
         }
@@ -582,6 +589,10 @@ export class SigningComponent implements OnInit {
 
   selectDoc(i: number): void {
     this.activeDocIndex.set(i);
+    // Update cached URLs to prevent flickering
+    const url = this.rawDocUrl();
+    this.cachedDocUrl.set(url);
+    this.cachedSafeUrl.set(url ? this.sanitizer.bypassSecurityTrustResourceUrl(url) : null);
     this.cdr.detectChanges();
     setTimeout(() => { this.renderDocxPreviewIfNeeded(); this.renderXlsxIfNeeded(); }, 50);
   }
@@ -592,8 +603,7 @@ export class SigningComponent implements OnInit {
   }
 
   activeDocUrl(): SafeResourceUrl | null {
-    const url = this.rawDocUrl();
-    return url ? this.sanitizer.bypassSecurityTrustResourceUrl(url) : null;
+    return this.cachedSafeUrl();
   }
 
   isPdf(): boolean { return this.activeDoc()?.mime_type === 'application/pdf'; }

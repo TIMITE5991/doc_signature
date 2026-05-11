@@ -85,6 +85,8 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
               </div>
             </div>
             <div class="viewer-controls">
+              <button type="button" class="ctrl-btn" (click)="goToSignatureZone()" title="Aller à la zone de signature">📍</button>
+              <button type="button" class="ctrl-btn" *ngIf="useStamp()" (click)="goToStampZone()" title="Aller à la zone du cachet">🏷</button>
               <button type="button" class="ctrl-btn" [title]="panningMode() ? 'Mode signature (Ctrl+Scroll pour zoom)' : 'Mode panoramique (Pan)'" (click)="togglePanMode()" [class.active]="panningMode()">
                 {{ panningMode() ? '✏️' : '✋' }}
               </button>
@@ -93,6 +95,10 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
               <button type="button" class="ctrl-btn" (click)="zoomIn()" [disabled]="zoom() >= 300" title="Zoomer">🔍+</button>
               <button type="button" class="ctrl-btn" (click)="resetZoom()" title="Réinitialiser">↺</button>
             </div>
+          </div>
+
+          <div class="viewer-mode-hint" *ngIf="isPdf()">
+            {{ panningMode() ? 'Mode ✋ actif: faites défiler le PDF normalement, puis repassez en ✏️ pour placer la signature/cachet.' : 'Mode ✏️ actif: cliquez pour positionner la signature/cachet.' }}
           </div>
 
           <!-- Navigation bar -->
@@ -117,6 +123,7 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
               <span *ngIf="isImage()">🖼️ Image</span>
               <span *ngIf="isDocx()">📝 Word</span>
               <span *ngIf="isXlsx()">📊 Excel</span>
+              <span *ngIf="isGenericIframeType()">📎 Document</span>
             </div>
 
             <!-- PDF viewer intégré -->
@@ -154,7 +161,19 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
             </div>
 
             <!-- Formats non supportés -->
-            <div class="doc-wrapper" *ngIf="cachedSafeUrl() && !isPdf() && !isImage() && !isDocx() && !isXlsx()">
+            <div class="doc-wrapper generic-wrapper" *ngIf="cachedSafeUrl() && isGenericIframeType()" (scroll)="onViewerContainerScroll($event)">
+              <iframe
+                [src]="cachedSafeUrl()!"
+                class="doc-iframe"
+                title="Visualiseur document">
+              </iframe>
+              <div class="hint-text" style="padding:8px 12px;">
+                Si l'aperçu ne s'affiche pas correctement, utilisez le bouton Télécharger.
+              </div>
+            </div>
+
+            <!-- Formats non supportés -->
+            <div class="doc-wrapper" *ngIf="cachedSafeUrl() && !isPdf() && !isImage() && !isDocx() && !isXlsx() && !isGenericIframeType()">
               <div class="error-msg">
                 <p>⚠️ Format non supporté</p>
                 <a class="btn btn-outline btn-sm" [href]="rawDocUrl()" target="_blank" rel="noopener">⬇ Télécharger</a>
@@ -168,6 +187,7 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
 
             <!-- Zone overlay -->
             <div class="zone-overlay" *ngIf="cachedSafeUrl() && (isPdf() || isImage() || isDocx())"
+              [class.interactive]="!panningMode()"
               (click)="onViewerZoneClick($event)"
               (pointermove)="onOverlayPointerMove($event)"
               (pointerup)="onOverlayPointerUp()"
@@ -606,13 +626,43 @@ export class SigningComponent implements OnInit {
     return this.cachedSafeUrl();
   }
 
-  isPdf(): boolean { return this.activeDoc()?.mime_type === 'application/pdf'; }
-  isImage(): boolean { return (this.activeDoc()?.mime_type || '').startsWith('image/'); }
-  isDocx(): boolean {
-    return this.activeDoc()?.mime_type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  isPdf(): boolean {
+    return this.matchesMimeOrExt(['application/pdf'], ['pdf']);
   }
+
+  isImage(): boolean {
+    const mime = (this.activeDoc()?.mime_type || '').toLowerCase();
+    const ext = this.activeDocExt();
+    return mime.startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext);
+  }
+
+  isDocx(): boolean {
+    return this.matchesMimeOrExt(
+      ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+      ['docx'],
+    );
+  }
+
   isXlsx(): boolean {
-    return this.activeDoc()?.mime_type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    return this.matchesMimeOrExt(
+      ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+      ['xlsx'],
+    );
+  }
+
+  isGenericIframeType(): boolean {
+    return !this.isPdf() && !this.isImage() && !this.isDocx() && !this.isXlsx();
+  }
+
+  private activeDocExt(): string {
+    const name = this.activeDoc()?.original_name || '';
+    const parts = name.toLowerCase().split('.');
+    return parts.length > 1 ? parts.pop() || '' : '';
+  }
+
+  private matchesMimeOrExt(mimes: string[], exts: string[]): boolean {
+    const mime = (this.activeDoc()?.mime_type || '').toLowerCase();
+    return mimes.includes(mime) || exts.includes(this.activeDocExt());
   }
 
   private async renderXlsxIfNeeded(): Promise<void> {
@@ -884,6 +934,33 @@ export class SigningComponent implements OnInit {
     const maxY = Math.max(0, scrollableEl.scrollHeight - scrollableEl.clientHeight);
     scrollableEl.scrollLeft = (x / 100) * maxX;
     scrollableEl.scrollTop = (y / 100) * maxY;
+  }
+
+  goToSignatureZone(): void {
+    const zone = this.signatureZone() ?? { x: 0.15, y: 0.90 };
+
+    this.goToZone(zone);
+  }
+
+  goToStampZone(): void {
+    this.goToZone(this.stampZone());
+  }
+
+  private goToZone(zone: { x: number; y: number }): void {
+
+    let scrollableEl = document.querySelector('.viewer-container .doc-wrapper') as HTMLElement;
+    if (!scrollableEl || scrollableEl.scrollHeight === scrollableEl.clientHeight) {
+      scrollableEl = document.querySelector('.viewer-container') as HTMLElement;
+    }
+    if (!scrollableEl) return;
+
+    const maxX = Math.max(0, scrollableEl.scrollWidth - scrollableEl.clientWidth);
+    const maxY = Math.max(0, scrollableEl.scrollHeight - scrollableEl.clientHeight);
+
+    const targetX = Math.min(maxX, Math.max(0, zone.x * scrollableEl.scrollWidth - scrollableEl.clientWidth * 0.35));
+    const targetY = Math.min(maxY, Math.max(0, zone.y * scrollableEl.scrollHeight - scrollableEl.clientHeight * 0.35));
+
+    scrollableEl.scrollTo({ left: targetX, top: targetY, behavior: 'smooth' });
   }
 
   // Navigate overview - calculate scroll percentage

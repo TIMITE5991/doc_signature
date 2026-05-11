@@ -76,12 +76,16 @@
 /* Preview Container */
 .zone-preview-iframe-container {
   flex: 1; overflow: auto; position: relative;
-  transform-origin: 0 0; transition: transform 0.1s ease-out;
+  transform-origin: 0 0; will-change: transform;
+}
+.zone-preview-iframe-container.animate-transform {
+  transition: transform 0.15s ease-out;
 }
 .zone-preview-iframe { width: 100%; height: 100%; border: none; display: block; }
 .zone-placer-overlay {
   position: absolute; inset: 0; cursor: crosshair;
   background: rgba(10,124,78,0.04); pointer-events: auto;
+  will-change: auto;
 }
 .zone-placer-hint {
   position: absolute; top: 8px; left: 50%; transform: translateX(-50%);

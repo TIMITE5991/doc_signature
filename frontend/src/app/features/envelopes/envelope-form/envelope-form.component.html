@@ -203,6 +203,7 @@
 
           <!-- Preview Container with Zoom/Pan -->
           <div class="zone-preview-iframe-container"
+            [class.animate-transform]="zoneAnimateTransform()"
             [style.transform]="'scale(' + (zoneZoom() / 100) + ') translate(' + zonePanX() + 'px, ' + zonePanY() + 'px)'"
             (wheel)="onZonePreviewWheel($event)"
             (scroll)="onZoneContainerScroll($event)"

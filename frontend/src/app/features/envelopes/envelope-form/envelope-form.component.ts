@@ -36,6 +36,10 @@ export class EnvelopeFormComponent implements OnInit {
   zoneScrollY      = signal(0);
   zoneContainerW   = signal(0);
   zoneContainerH   = signal(0);
+  zoneAnimateTransform = signal(false);
+
+  private zonePanPending = false;
+  private zoneScrollPending = false;
 
   form = this.fb.group({
     title:        ['', Validators.required],
@@ -215,14 +219,26 @@ export class EnvelopeFormComponent implements OnInit {
   }
 
   // ── Zone Preview Zoom/Pan ──────────────
-  zoneZoomIn(): void { this.zoneZoom.update(z => Math.min(z + 25, 300)); }
-  zoneZoomOut(): void { this.zoneZoom.update(z => Math.max(z - 25, 50)); }
-  zoneResetZoom(): void { this.zoneZoom.set(100); this.zonePanX.set(0); this.zonePanY.set(0); }
+  zoneZoomIn(): void { 
+    this.zoneAnimateTransform.set(true);
+    this.zoneZoom.update(z => Math.min(z + 25, 300)); 
+  }
+  zoneZoomOut(): void { 
+    this.zoneAnimateTransform.set(true);
+    this.zoneZoom.update(z => Math.max(z - 25, 50)); 
+  }
+  zoneResetZoom(): void { 
+    this.zoneAnimateTransform.set(true);
+    this.zoneZoom.set(100); 
+    this.zonePanX.set(0); 
+    this.zonePanY.set(0); 
+  }
   zoneTogglePanMode(): void { this.zonePanningMode.update(v => !v); }
 
   onZonePreviewWheel(event: WheelEvent): void {
     if (!event.ctrlKey && !event.metaKey) return;
     event.preventDefault();
+    this.zoneAnimateTransform.set(true);
     const delta = event.deltaY > 0 ? -25 : 25;
     this.zoneZoom.update(z => Math.min(Math.max(z + delta, 50), 300));
   }
@@ -230,20 +246,30 @@ export class EnvelopeFormComponent implements OnInit {
   onZonePreviewPan(event: PointerEvent, viewer: HTMLElement): void {
     if (!this.zonePanningMode()) return;
     if (event.button !== 0) return;
+    
+    this.zoneAnimateTransform.set(false);
+    
     const startX = event.clientX;
     const startY = event.clientY;
     const startPanX = this.zonePanX();
     const startPanY = this.zonePanY();
 
     const onMove = (e: PointerEvent) => {
-      const dx = e.clientX - startX;
-      const dy = e.clientY - startY;
-      this.zonePanX.set(startPanX + dx);
-      this.zonePanY.set(startPanY + dy);
+      if (!this.zonePanPending) {
+        this.zonePanPending = true;
+        requestAnimationFrame(() => {
+          const dx = e.clientX - startX;
+          const dy = e.clientY - startY;
+          this.zonePanX.set(startPanX + dx);
+          this.zonePanY.set(startPanY + dy);
+          this.zonePanPending = false;
+        });
+      }
     };
     const onEnd = () => {
       document.removeEventListener('pointermove', onMove);
       document.removeEventListener('pointerup', onEnd);
+      this.zonePanPending = false;
     };
     document.addEventListener('pointermove', onMove);
     document.addEventListener('pointerup', onEnd);
@@ -256,10 +282,16 @@ export class EnvelopeFormComponent implements OnInit {
 
   onZoneContainerScroll(event: Event): void {
     const target = event.target as HTMLElement;
-    this.zoneScrollX.set(target.scrollLeft);
-    this.zoneScrollY.set(target.scrollTop);
-    this.zoneContainerW.set(target.clientWidth);
-    this.zoneContainerH.set(target.clientHeight);
+    if (!this.zoneScrollPending) {
+      this.zoneScrollPending = true;
+      requestAnimationFrame(() => {
+        this.zoneScrollX.set(target.scrollLeft);
+        this.zoneScrollY.set(target.scrollTop);
+        this.zoneContainerW.set(target.clientWidth);
+        this.zoneContainerH.set(target.clientHeight);
+        this.zoneScrollPending = false;
+      });
+    }
   }
 
   zoneScrollToPercent(y: number): void {

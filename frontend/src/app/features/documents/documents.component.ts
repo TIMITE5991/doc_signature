@@ -135,8 +135,21 @@ import { Document } from '../../core/models';
           <div *ngIf="!viewerLoading() && isXlsxViewing()" class="doc-wrapper xlsx-wrap"
                [innerHTML]="xlsxHtml()"></div>
 
+          <!-- Text -->
+          <div *ngIf="!viewerLoading() && isTextViewing()" class="doc-wrapper text-wrap">
+            <pre class="text-preview">{{ viewerTextContent() }}</pre>
+          </div>
+
+          <!-- Browser fallback -->
+          <div *ngIf="!viewerLoading() && !isPdfViewing() && !isImageViewing() && !isDocxViewing() && !isXlsxViewing() && !isTextViewing() && canUseIframeFallback()" class="doc-wrapper pdf-wrapper">
+            <iframe *ngIf="viewerSafeUrl()" [src]="viewerSafeUrl()!" class="viewer-iframe" title="Visionneuse document"></iframe>
+            <div *ngIf="!viewerSafeUrl()" class="unsupported-wrap">
+              <p>📎 Prévisualisation indisponible pour ce type de document.</p>
+            </div>
+          </div>
+
           <!-- Unsupported -->
-          <div *ngIf="!viewerLoading() && !isPdfViewing() && !isImageViewing() && !isDocxViewing() && !isXlsxViewing()" class="unsupported-wrap">
+          <div *ngIf="!viewerLoading() && isUnsupportedViewing()" class="unsupported-wrap">
             <p>📎 Ce type de fichier ne peut pas être affiché.</p>
             <a [href]="api.getDocumentViewUrl(viewingDoc()!.id_document)" target="_blank"
                rel="noopener" class="btn btn-primary">⬇ Télécharger</a>
@@ -149,17 +162,17 @@ import { Document } from '../../core/models';
     .viewer-overlay {
       position: fixed; inset: 0; background: rgba(0,0,0,0.65);
       display: flex; align-items: center; justify-content: center;
-      z-index: 2000; padding: 16px;
+      z-index: 2000; padding: 0;
     }
     .viewer-modal {
-      background: #fff; border-radius: 12px; width: 100%; max-width: 960px;
-      max-height: 90vh; display: flex; flex-direction: column;
-      box-shadow: 0 24px 80px rgba(0,0,0,0.4); overflow: hidden;
+      background: #fff; border-radius: 0; width: 100vw; height: 100vh;
+      display: flex; flex-direction: column;
+      box-shadow: none; overflow: hidden;
     }
     .viewer-header {
       display: flex; align-items: center; justify-content: space-between;
       padding: 14px 20px; border-bottom: 1px solid var(--border); flex-shrink: 0;
-      position: relative;
+      position: relative; min-height: 62px;
     }
     .doc-type-badge {
       position: absolute; top: 50%; right: 72px; transform: translateY(-50%);
@@ -192,6 +205,7 @@ import { Document } from '../../core/models';
     .viewer-body {
       flex: 1; overflow: auto; min-height: 0;
       display: flex; align-items: center; justify-content: center;
+      background: #f3f4f6;
     }
     .doc-wrapper {
       display: flex; align-items: center; justify-content: center;
@@ -221,7 +235,8 @@ import { Document } from '../../core/models';
       tr:nth-child(even) { background: #f9f9f9; }
     }
     .viewer-iframe {
-      width: 100%; height: 100%; border: none; display: block;
+      width: 100%; height: 100%; min-height: calc(100vh - 62px);
+      border: none; display: block;
     }
     .img-viewer-wrap {
       display: flex; align-items: center; justify-content: center;
@@ -254,6 +269,16 @@ import { Document } from '../../core/models';
       justify-content: center; gap: 16px; padding: 48px;
       color: var(--text-muted);
     }
+    .text-wrap {
+      width: 100%; height: 100%; align-items: stretch; justify-content: stretch;
+      background: #fff; padding: 0;
+    }
+    .text-preview {
+      margin: 0; width: 100%; min-height: calc(100vh - 62px);
+      padding: 20px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+      font: 13px/1.5 Consolas, 'Courier New', monospace; color: #1f2937;
+      background: #fff;
+    }
   `],
 })
 export class DocumentsComponent implements OnInit {
@@ -268,6 +293,7 @@ export class DocumentsComponent implements OnInit {
   viewerLoading = signal(false);
   viewerBlobUrl = signal<string>('');
   viewerSafeUrl = signal<SafeResourceUrl | null>(null);
+  viewerTextContent = signal<string>('');
   xlsxHtml      = signal<SafeHtml | null>(null);
   // Viewer controls (zoom/pan)
   viewerZoom    = signal(100);
@@ -288,18 +314,18 @@ export class DocumentsComponent implements OnInit {
     this.viewingDoc.set(doc);
     this.viewerBlobUrl.set('');
     this.viewerSafeUrl.set(null);
+    this.viewerTextContent.set('');
     this.xlsxHtml.set(null);
     this.viewerLoading.set(true);
 
     this.api.getDocumentBlob(doc.id_document).subscribe({
       next: async (blob) => {
-        const mime = doc.mime_type;
-        if (mime === 'application/pdf' || mime.startsWith('image/')) {
+        if (this.isPdfViewing(doc) || this.isImageViewing(doc)) {
           const url = URL.createObjectURL(blob);
           this.viewerBlobUrl.set(url);
           this.viewerSafeUrl.set(this.sanitizer.bypassSecurityTrustResourceUrl(url));
           this.viewerLoading.set(false);
-        } else if (mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+        } else if (this.isDocxViewing(doc)) {
           this.viewerLoading.set(false);
           this.cdr.detectChanges();
           // Retry jusqu'à 5 fois si le container n'est pas encore dans le DOM
@@ -322,7 +348,7 @@ export class DocumentsComponent implements OnInit {
           } catch {
             container.innerHTML = '<p style="color:#b91c1c;padding:12px">Impossible d\'afficher ce DOCX.</p>';
           }
-        } else if (mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
+        } else if (this.isXlsxViewing(doc)) {
           try {
             const ab = await blob.arrayBuffer();
             const XLSX = await import('xlsx');
@@ -333,6 +359,19 @@ export class DocumentsComponent implements OnInit {
           } catch {
             this.xlsxHtml.set(this.sanitizer.bypassSecurityTrustHtml('<p style="color:#b91c1c">Impossible d\'afficher ce fichier XLSX.</p>'));
           }
+          this.viewerLoading.set(false);
+        } else if (this.isTextViewing(doc)) {
+          try {
+            const text = await blob.text();
+            this.viewerTextContent.set(text);
+          } catch {
+            this.viewerTextContent.set('Impossible d\'afficher ce contenu texte.');
+          }
+          this.viewerLoading.set(false);
+        } else if (this.canUseIframeFallback(doc)) {
+          const url = URL.createObjectURL(blob);
+          this.viewerBlobUrl.set(url);
+          this.viewerSafeUrl.set(this.sanitizer.bypassSecurityTrustResourceUrl(url));
           this.viewerLoading.set(false);
         } else {
           this.viewerLoading.set(false);
@@ -348,6 +387,9 @@ export class DocumentsComponent implements OnInit {
     const url = this.viewerBlobUrl();
     if (url) URL.revokeObjectURL(url);
     this.viewingDoc.set(null);
+    this.viewerSafeUrl.set(null);
+    this.viewerTextContent.set('');
+    this.xlsxHtml.set(null);
     this.viewerZoom.set(100);
     this.viewerPanX.set(0);
     this.viewerPanY.set(0);
@@ -355,12 +397,66 @@ export class DocumentsComponent implements OnInit {
     this.viewerScrollY.set(0);
   }
 
-  isPdfViewing():        boolean { return this.viewingDoc()?.mime_type === 'application/pdf'; }
-  isImageViewing():     boolean { return (this.viewingDoc()?.mime_type || '').startsWith('image/'); }
-  isDocxViewing():      boolean { return this.viewingDoc()?.mime_type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'; }
-  isXlsxViewing():      boolean { return this.viewingDoc()?.mime_type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'; }
+  isPdfViewing(doc: Document | null = this.viewingDoc()): boolean {
+    return this.matchesMimeOrExt(doc, ['application/pdf'], ['pdf']);
+  }
+
+  isImageViewing(doc: Document | null = this.viewingDoc()): boolean {
+    if (!doc) return false;
+    const mime = (doc.mime_type || '').toLowerCase();
+    const ext = this.fileExt(doc);
+    return mime.startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext);
+  }
+
+  isDocxViewing(doc: Document | null = this.viewingDoc()): boolean {
+    return this.matchesMimeOrExt(
+      doc,
+      ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+      ['docx'],
+    );
+  }
+
+  isXlsxViewing(doc: Document | null = this.viewingDoc()): boolean {
+    return this.matchesMimeOrExt(
+      doc,
+      ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+      ['xlsx'],
+    );
+  }
+
+  isTextViewing(doc: Document | null = this.viewingDoc()): boolean {
+    if (!doc) return false;
+    const mime = (doc.mime_type || '').toLowerCase();
+    const ext = this.fileExt(doc);
+    return mime.startsWith('text/')
+      || ['application/json', 'application/xml', 'application/javascript'].includes(mime)
+      || ['txt', 'csv', 'json', 'xml', 'md', 'log', 'yaml', 'yml'].includes(ext);
+  }
+
+  canUseIframeFallback(doc: Document | null = this.viewingDoc()): boolean {
+    if (!doc) return false;
+    return !this.isDocxViewing(doc) && !this.isXlsxViewing(doc) && !this.isTextViewing(doc);
+  }
+
   isUnsupportedViewing(): boolean {
-    return !this.isPdfViewing() && !this.isImageViewing() && !this.isDocxViewing() && !this.isXlsxViewing();
+    return !this.isPdfViewing()
+      && !this.isImageViewing()
+      && !this.isDocxViewing()
+      && !this.isXlsxViewing()
+      && !this.isTextViewing()
+      && !this.canUseIframeFallback();
+  }
+
+  private fileExt(doc: Document | null): string {
+    if (!doc?.original_name) return '';
+    const parts = doc.original_name.toLowerCase().split('.');
+    return parts.length > 1 ? parts.pop() || '' : '';
+  }
+
+  private matchesMimeOrExt(doc: Document | null, mimes: string[], exts: string[]): boolean {
+    if (!doc) return false;
+    const mime = (doc.mime_type || '').toLowerCase();
+    return mimes.includes(mime) || exts.includes(this.fileExt(doc));
   }
 
 

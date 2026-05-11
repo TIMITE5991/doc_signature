@@ -5,6 +5,11 @@ export interface EmailOptions {
   to: string;
   subject: string;
   html: string;
+  attachments?: Array<{
+    filename: string;
+    path: string;
+    contentType?: string;
+  }>;
 }
 
 @Injectable()
@@ -33,6 +38,7 @@ export class EmailService {
         to: opts.to,
         subject: opts.subject,
         html: opts.html,
+        attachments: opts.attachments,
       });
       this.logger.log(`Email envoyé à ${opts.to} — ${opts.subject}`);
     } catch (err: unknown) {
@@ -62,11 +68,17 @@ export class EmailService {
     senderName: string,
     envelopeTitle: string,
     signerName: string,
+    attachment?: {
+      filename: string;
+      path: string;
+      contentType?: string;
+    },
   ) {
     await this.send({
       to: senderEmail,
       subject: `[CGRAE Signature] Document signé : ${envelopeTitle}`,
       html: this.templateSignatureConfirmation(senderName, envelopeTitle, signerName),
+      attachments: attachment ? [attachment] : undefined,
     });
   }
 

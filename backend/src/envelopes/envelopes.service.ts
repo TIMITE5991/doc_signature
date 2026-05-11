@@ -224,6 +224,8 @@ export class EnvelopesService {
       sigFile = userRow.signature_path;
     }
 
+    let signedAttachment: { filename: string; path: string; contentType?: string } | undefined;
+
     if (sigFile) {
       // Zone prédéfinie par l'émetteur (prioritaire sur la position choisie par le signataire)
       const targetDocId = recipient.sig_doc_id
@@ -279,16 +281,24 @@ export class EnvelopesService {
         }
 
         try {
-          await this.applySignatureOnEnvelopeDocument(
+          const signedDoc = await this.applySignatureOnEnvelopeDocument(
             envelope.id_envelope,
             targetDocId,
             sigFile,
             xRatio,
             yRatio,
+            envelope.created_by,
             resolvedStampPath,
             stampX,
             stampY,
           );
+          if (signedDoc?.path && fs.existsSync(signedDoc.path)) {
+            signedAttachment = {
+              filename: signedDoc.original_name || signedDoc.name || 'document-signe',
+              path: signedDoc.path,
+              contentType: signedDoc.mime_type || undefined,
+            };
+          }
         } catch (error) {
           console.error('Signature/cachet application failed', error);
           throw new BadRequestException('Impossible d\'apposer la signature/cachet sur le document. Vérifiez les images puis réessayez.');
@@ -315,6 +325,7 @@ export class EnvelopesService {
       `${sender.first_name} ${sender.last_name}`,
       envelope.title,
       `${recipient.first_name} ${recipient.last_name}`,
+      signedAttachment,
     ).catch(err => console.error('[Email] sendSignatureConfirmation failed:', err));
 
     // Notifier l'émetteur dans l'application
@@ -336,17 +347,18 @@ export class EnvelopesService {
     signaturePath: string,
     xRatio: number,
     yRatio: number,
+    ownerUserId: number,
     stampPath?: string,
     stampXRatio?: number,
     stampYRatio?: number,
-  ): Promise<void> {
+  ): Promise<{ id_document: number; name: string; original_name: string; path: string; mime_type: string } | null> {
     const [link] = await this.db('t_envelope_documents')
       .where('id_envelope', envelopeId)
       .where('id_document', docId);
-    if (!link) return;
+    if (!link) return null;
 
     const [doc] = await this.db('t_documents').where('id_document', docId);
-    if (!doc || !fs.existsSync(doc.path)) return;
+    if (!doc || !fs.existsSync(doc.path)) return null;
 
     const ext = path.extname(doc.path).toLowerCase();
     const signedDir = path.resolve(process.env.UPLOAD_DEST || './uploads', 'signed');
@@ -359,7 +371,7 @@ export class EnvelopesService {
       const pdfDoc = await PDFDocument.load(pdfBytes);
       const sigImage = await pdfDoc.embedPng(sigBytes);
       const page = pdfDoc.getPages()[0];
-      if (!page) return;
+      if (!page) return null;
 
       const pageWidth = page.getWidth();
       const pageHeight = page.getHeight();
@@ -432,7 +444,7 @@ export class EnvelopesService {
     ) {
       await this.embedSignatureInDocx(doc.path, signaturePath, stampedPath, stampPath);
     } else {
-      return;
+      return null;
     }
 
     const stat = fs.statSync(stampedPath);
@@ -443,13 +455,18 @@ export class EnvelopesService {
       mime_type: doc.mime_type,
       size: stat.size,
       version: Number(doc.version || 1) + 1,
-      created_by: doc.created_by,
+      created_by: ownerUserId,
     });
 
     await this.db('t_envelope_documents')
       .where('id_envelope', envelopeId)
       .where('id_document', docId)
       .update({ id_document: newDocId });
+
+    const [newDoc] = await this.db('t_documents')
+      .where('id_document', newDocId)
+      .select('id_document', 'name', 'original_name', 'path', 'mime_type');
+    return newDoc || null;
   }
 
   private buildDocxImageParagraph(relId: string, mediaName: string, elementId: number, align: 'left' | 'right', cxEmu: number, cyEmu: number): string {

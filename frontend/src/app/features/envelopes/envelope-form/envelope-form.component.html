@@ -181,7 +181,7 @@
 
       <!-- Colonne droite : aperçu du document avec overlay -->
       <div class="zone-preview-col">
-        <div class="zone-preview-wrap" *ngIf="getZonePreviewDocUrl(zoneRecipientIdx()) as docUrl">
+        <div class="zone-preview-wrap" *ngIf="isZonePreviewSupported(zoneRecipientIdx()) && getZonePreviewDocUrl(zoneRecipientIdx()) as docUrl; else zonePreviewUnsupported">
           <!-- Preview Header with Controls -->
           <div class="zone-preview-header">
             <button type="button" class="zone-ctrl-btn" [title]="zonePanningMode() ? 'Mode sélection' : 'Mode panoramique'" (click)="zoneTogglePanMode()" [class.active]="zonePanningMode()">
@@ -236,6 +236,21 @@
             </div>
           </div>
         </div>
+
+        <ng-template #zonePreviewUnsupported>
+          <div class="zone-preview-wrap zone-preview-unavailable">
+            <div class="zone-preview-unavailable-content" *ngIf="getZonePreviewDoc(zoneRecipientIdx()) as zoneDoc">
+              <h4>Aperçu indisponible pour ce format</h4>
+              <p>
+                Le document <strong>{{ zoneDoc.original_name }}</strong> ne peut pas être prévisualisé ici.
+              </p>
+              <p>Utilisez un PDF ou une image (PNG/JPG) pour positionner la zone sans téléchargement automatique.</p>
+              <a class="btn btn-outline btn-sm" [href]="api.getDocumentViewUrl(zoneDoc.id_document)" target="_blank" rel="noopener">
+                Ouvrir le document
+              </a>
+            </div>
+          </div>
+        </ng-template>
       </div>
     </div>
   </div>

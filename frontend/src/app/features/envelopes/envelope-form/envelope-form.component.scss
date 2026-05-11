@@ -38,6 +38,27 @@
 
 .zone-preview-col { position: relative; }
 .zone-preview-wrap { position: relative; border-radius: 8px; overflow: hidden; border: 1.5px solid var(--border); display: flex; flex-direction: column; height: 600px; }
+.zone-preview-unavailable {
+  background: #f9fafb;
+  align-items: center;
+  justify-content: center;
+  border-style: dashed;
+}
+.zone-preview-unavailable-content {
+  max-width: 520px;
+  text-align: center;
+  padding: 24px;
+}
+.zone-preview-unavailable-content h4 {
+  margin: 0 0 10px;
+  color: var(--primary);
+  font-size: 16px;
+}
+.zone-preview-unavailable-content p {
+  margin: 0 0 12px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
 
 /* Preview Header Controls */
 .zone-preview-header {

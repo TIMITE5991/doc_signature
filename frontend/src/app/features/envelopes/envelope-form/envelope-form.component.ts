@@ -40,6 +40,7 @@ export class EnvelopeFormComponent implements OnInit {
 
   private zonePanPending = false;
   private zoneScrollPending = false;
+  private zonePreviewUrlCache = new Map<number, SafeResourceUrl>();
 
   form = this.fb.group({
     title:        ['', Validators.required],
@@ -119,11 +120,33 @@ export class EnvelopeFormComponent implements OnInit {
     return this.myDocs().find(d => d.id_document === docId)?.original_name || `Doc ${docId}`;
   }
 
+  getZonePreviewDoc(recipientIdx: number): Document | null {
+    const docIndex = this.zoneDocMap().get(recipientIdx) ?? 0;
+    const docId = this.selectedDocs()[docIndex];
+    if (!docId) return null;
+    return this.myDocs().find(d => d.id_document === docId) || null;
+  }
+
+  isZonePreviewSupported(recipientIdx: number): boolean {
+    const doc = this.getZonePreviewDoc(recipientIdx);
+    if (!doc) return false;
+    const mime = (doc.mime_type || '').toLowerCase();
+    const ext = (doc.original_name || '').toLowerCase().split('.').pop() || '';
+    return mime === 'application/pdf'
+      || mime.startsWith('image/')
+      || ['pdf', 'png', 'jpg', 'jpeg', 'webp'].includes(ext);
+  }
+
   getZonePreviewDocUrl(recipientIdx: number): SafeResourceUrl | null {
+    if (!this.isZonePreviewSupported(recipientIdx)) return null;
     const docIndex = this.zoneDocMap().get(recipientIdx) ?? 0;
     const docId    = this.selectedDocs()[docIndex];
     if (!docId) return null;
-    return this.sanitizer.bypassSecurityTrustResourceUrl(this.api.getDocumentViewUrl(docId));
+    const cached = this.zonePreviewUrlCache.get(docId);
+    if (cached) return cached;
+    const safeUrl = this.sanitizer.bypassSecurityTrustResourceUrl(this.api.getDocumentViewUrl(docId));
+    this.zonePreviewUrlCache.set(docId, safeUrl);
+    return safeUrl;
   }
 
   onZonePlacerClick(event: MouseEvent, recipientIdx: number): void {

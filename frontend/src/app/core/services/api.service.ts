@@ -134,6 +134,18 @@ export class ApiService {
     return this.http.post<Envelope>(`${this.base}/envelopes/create-and-send`, payload);
   }
 
+  replaceEnvelopeDocuments(id: number, document_ids: number[]): Observable<Envelope> {
+    return this.http.post<Envelope>(`${this.base}/envelopes/${id}/documents`, { document_ids });
+  }
+
+  forwardEnvelopeByCreator(id: number, payload: { forward_email: string; forward_first_name: string; forward_last_name: string; }): Observable<Envelope> {
+    return this.http.post<Envelope>(`${this.base}/envelopes/${id}/forward`, payload);
+  }
+
+  closeEnvelopeByCreator(id: number): Observable<Envelope> {
+    return this.http.post<Envelope>(`${this.base}/envelopes/${id}/close`, {});
+  }
+
   sendEnvelope(id: number): Observable<Envelope> {
     return this.http.post<Envelope>(`${this.base}/envelopes/${id}/send`, {});
   }
@@ -164,10 +176,10 @@ export class ApiService {
     signatureImage?: string,
     useSavedSignature?: boolean,
     comment?: string,
-    signaturePosition?: { doc_id: number; x_ratio: number; y_ratio: number },
+    signaturePosition?: { doc_id: number; x_ratio: number; y_ratio: number; page_number?: number },
     useStamp?: boolean,
     stampImage?: string,
-    stampPosition?: { doc_id: number; x_ratio: number; y_ratio: number },
+    stampPosition?: { doc_id: number; x_ratio: number; y_ratio: number; page_number?: number },
   ): Observable<any> {
     return this.http.post(`${this.base}/envelopes/sign/${token}/confirm`,
       {

@@ -17,7 +17,7 @@ import { Envelope } from '../../core/models';
         <p>{{ today | date:'EEEE d MMMM yyyy':'':'fr' }} — Vue d'ensemble de votre activité</p>
       </div>
       <a routerLink="/envelopes/new" class="btn btn-primary">
-        ＋ Nouvelle enveloppe
+        ＋ Nouveau parapheur
       </a>
     </div>
 
@@ -27,7 +27,7 @@ import { Envelope } from '../../core/models';
         <div class="stat-icon" style="background:#e8f4fd">📨</div>
         <div>
           <div class="stat-value">{{ counts.total }}</div>
-          <div class="stat-label">Enveloppes totales</div>
+          <div class="stat-label">Parapheurs totaux</div>
         </div>
       </div>
       <div class="stat-card">
@@ -65,14 +65,14 @@ import { Envelope } from '../../core/models';
     <!-- Recent envelopes -->
     <div class="card" *ngIf="!loading()">
       <div class="d-flex justify-between align-center mb-2">
-        <h3 style="font-size:15px;font-weight:600">Enveloppes récentes</h3>
+        <h3 style="font-size:15px;font-weight:600">Parapheurs récents</h3>
         <a routerLink="/envelopes" style="font-size:13px">Voir tout →</a>
       </div>
 
       <div class="empty-state" *ngIf="recent.length === 0">
         <div class="icon">📭</div>
-        <p>Aucune enveloppe pour l'instant</p>
-        <a routerLink="/envelopes/new" class="btn btn-primary btn-sm mt-2">Créer une enveloppe</a>
+        <p>Aucun parapheur pour l'instant</p>
+        <a routerLink="/envelopes/new" class="btn btn-primary btn-sm mt-2">Créer un parapheur</a>
       </div>
 
       <div class="table-wrapper" *ngIf="recent.length > 0">

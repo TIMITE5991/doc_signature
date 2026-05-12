@@ -12,10 +12,10 @@ import { Envelope } from '../../../core/models';
   template: `
     <div class="page-header">
       <div>
-        <h1>Enveloppes</h1>
+        <h1>Parapheur</h1>
         <p>Circuits de signature de vos documents</p>
       </div>
-      <a routerLink="/envelopes/new" class="btn btn-primary">＋ Nouvelle enveloppe</a>
+      <a routerLink="/envelopes/new" class="btn btn-primary">＋ Nouveau parapheur</a>
     </div>
 
     <!-- Filters -->
@@ -31,8 +31,8 @@ import { Envelope } from '../../../core/models';
     <div class="card" *ngIf="!loading()">
       <div class="empty-state" *ngIf="filtered().length === 0">
         <div class="icon">📭</div>
-        <p>Aucune enveloppe dans cette catégorie</p>
-        <a routerLink="/envelopes/new" class="btn btn-primary btn-sm mt-2">Créer une enveloppe</a>
+        <p>Aucun parapheur dans cette catégorie</p>
+        <a routerLink="/envelopes/new" class="btn btn-primary btn-sm mt-2">Créer un parapheur</a>
       </div>
 
       <div class="table-wrapper" *ngIf="filtered().length > 0">

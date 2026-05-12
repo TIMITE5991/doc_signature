@@ -1,7 +1,7 @@
 <div class="page-header">
   <div>
-    <h1>Nouvelle enveloppe</h1>
-    <p>Configurez votre circuit de signature</p>
+  <h1>Nouveau parapheur</h1>
+  <p>Configurez votre parapheur de signature</p>
   </div>
 </div>
 
@@ -33,11 +33,14 @@
           <div class="form-group">
             <label>Type de circuit *</label>
             <select formControlName="circuit_type">
-              <option value="SEQUENTIAL">Séquentiel</option>
+              <option value="SEQUENTIAL">Séquentiel strict (successif)</option>
               <option value="PARALLEL">Parallèle</option>
               <option value="MIXED">Mixte</option>
               <option value="CONDITIONAL">Conditionnel</option>
             </select>
+            <small style="display:block;margin-top:6px;color:var(--text-muted)" *ngIf="form.value.circuit_type === 'SEQUENTIAL'">
+              L'ordre des destinataires est obligatoire: 1, 2, 3... Le document est transmis successivement.
+            </small>
           </div>
           <div class="form-group">
             <label>Date d'expiration</label>
@@ -87,16 +90,6 @@
           <span style="font-weight:600;font-size:13px">Destinataire {{ i + 1 }}</span>
           <button type="button" class="btn-icon" (click)="removeRecipient(i)">✕</button>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-          <div class="form-group" style="margin-bottom:8px">
-            <label>Prénom</label>
-            <input type="text" formControlName="first_name" placeholder="Prénom" />
-          </div>
-          <div class="form-group" style="margin-bottom:8px">
-            <label>Nom</label>
-            <input type="text" formControlName="last_name" placeholder="Nom" />
-          </div>
-        </div>
         <div class="form-group" style="margin-bottom:8px">
           <label>Email &#64;cgrae.ci</label>
           <input type="email" formControlName="email" placeholder="nom.prenom&#64;cgrae.ci" />
@@ -107,9 +100,9 @@
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
           <div class="form-group" style="margin-bottom:0">
             <label>Rôle</label>
-            <select formControlName="role">
+            <select formControlName="role" (change)="onRecipientRoleChange()">
               <option value="SIGNATORY">Signataire</option>
-              <option value="APPROVER">Approbateur</option>
+              <option value="APPROVER">Vérificateur</option>
               <option value="VIEWER">Visualisateur</option>
               <option value="DELEGATOR">Délégateur</option>
             </select>
@@ -150,13 +143,13 @@
         <div *ngFor="let i of signatoryIndices()"
              class="zone-recipient-tab"
              [class.active]="zoneRecipientIdx() === i"
-             (click)="zoneRecipientIdx.set(i)">
+             (click)="selectZoneRecipient(i)">
           <div style="flex:1;min-width:0">
             <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
               {{ getRecipientLabel(i) }}
             </div>
             <div *ngIf="hasZone(i)" class="zone-set-info">
-              ✅ {{ zonePercentX(i) }}% L · {{ zonePercentY(i) }}% H
+              ✅ P{{ getZonePage(i) }} · {{ zonePercentX(i) }}% L · {{ zonePercentY(i) }}% H
             </div>
             <div *ngIf="!hasZone(i)" class="zone-unset-info">
               Cliquez sur le doc →
@@ -177,11 +170,23 @@
             </option>
           </select>
         </div>
+
+        <div class="form-group mt-2" style="margin-bottom:0">
+          <label style="font-size:11px">Page cible (PDF multi-pages)</label>
+          <input type="number" min="1" [value]="getZonePage(zoneRecipientIdx())" (input)="setZonePageForRecipient(zoneRecipientIdx(), $any($event.target).value)">
+        </div>
+
+        <div class="form-group mt-2" style="margin-bottom:0" *ngIf="hasZone(zoneRecipientIdx())">
+          <label style="font-size:11px">Position X précise: {{ zonePercentX(zoneRecipientIdx()) }}%</label>
+          <input type="range" min="0" max="100" [value]="zonePercentX(zoneRecipientIdx())" (input)="updateZoneXForRecipient(zoneRecipientIdx(), $any($event.target).value)">
+          <label style="font-size:11px;margin-top:8px">Position Y précise: {{ zonePercentY(zoneRecipientIdx()) }}%</label>
+          <input type="range" min="0" max="100" [value]="zonePercentY(zoneRecipientIdx())" (input)="updateZoneYForRecipient(zoneRecipientIdx(), $any($event.target).value)">
+        </div>
       </div>
 
       <!-- Colonne droite : aperçu du document avec overlay -->
       <div class="zone-preview-col">
-        <div class="zone-preview-wrap" *ngIf="isZonePreviewSupported(zoneRecipientIdx()) && getZonePreviewDocUrl(zoneRecipientIdx()) as docUrl; else zonePreviewUnsupported">
+        <div class="zone-preview-wrap" *ngIf="isZonePreviewSupported(zoneRecipientIdx()); else zonePreviewUnsupported">
           <!-- Preview Header with Controls -->
           <div class="zone-preview-header">
             <button type="button" class="zone-ctrl-btn" [title]="zonePanningMode() ? 'Mode sélection' : 'Mode panoramique'" (click)="zoneTogglePanMode()" [class.active]="zonePanningMode()">
@@ -203,36 +208,87 @@
 
           <!-- Preview Container with Zoom/Pan -->
           <div class="zone-preview-iframe-container"
-            [class.animate-transform]="zoneAnimateTransform()"
-            [style.transform]="'scale(' + (zoneZoom() / 100) + ') translate(' + zonePanX() + 'px, ' + zonePanY() + 'px)'"
             (wheel)="onZonePreviewWheel($event)"
             (scroll)="onZoneContainerScroll($event)"
             (pointerdown)="onZonePreviewPan($event, $any($event.currentTarget))">
-            <iframe [src]="docUrl" class="zone-preview-iframe" title="Aperçu document"></iframe>
+            <div class="zone-preview-content"
+              (click)="onZonePreviewClick($event, zoneRecipientIdx())"
+              [class.placement-mode]="!zonePanningMode() && !zoneDocxLoading() && !zoneIframeLoading() && !zoneDocxError() && !zoneIframeError()"
+              [class.animate-transform]="zoneAnimateTransform()"
+              [style.transform]="'scale(' + (zoneZoom() / 100) + ') translate(' + zonePanX() + 'px, ' + zonePanY() + 'px)'">
 
-            <!-- Overlay cliquable -->
-            <div class="zone-placer-overlay" (click)="onZonePlacerClick($event, zoneRecipientIdx())" *ngIf="!zonePanningMode()">
-              <div class="zone-placer-hint">
-                📍 Cliquez pour placer la zone de <strong>{{ getRecipientLabel(zoneRecipientIdx()) }}</strong>
-              </div>
-
-              <!-- Marqueur zone active -->
-              <div *ngIf="hasZone(zoneRecipientIdx())"
-                   class="zone-placed-marker"
-                   [style.left.%]="getZoneX(zoneRecipientIdx())"
-                   [style.top.%]="getZoneY(zoneRecipientIdx())">
-                <span class="zone-placed-label">✍ {{ getRecipientLabel(zoneRecipientIdx()) }}</span>
-              </div>
-
-              <!-- Marqueurs autres signataires (gris) -->
-              <ng-container *ngFor="let i of signatoryIndices()">
-                <div *ngIf="hasZone(i) && i !== zoneRecipientIdx()"
-                     class="zone-placed-marker zone-placed-marker-other"
-                     [style.left.%]="getZoneX(i)"
-                     [style.top.%]="getZoneY(i)">
-                  <span class="zone-placed-label">{{ getRecipientLabel(i) }}</span>
+              <ng-container *ngIf="isZoneDocxPreview(zoneRecipientIdx()); else zoneIframePreview">
+                <div class="zone-docx-preview">
+                  <div class="loading-center" *ngIf="zoneDocxLoading()">
+                    <div class="spinner" style="width:24px;height:24px;border-width:2px"></div>
+                  </div>
+                  <div class="error-msg" *ngIf="zoneDocxError()">{{ zoneDocxError() }}</div>
+                  <div #zoneDocxContainer class="zone-docx-container" [style.display]="zoneDocxError() ? 'none' : 'block'"></div>
                 </div>
               </ng-container>
+
+              <ng-template #zoneIframePreview>
+                <div class="loading-center" *ngIf="zoneIframeLoading()">
+                  <div class="spinner" style="width:24px;height:24px;border-width:2px"></div>
+                </div>
+                <div class="error-msg" *ngIf="zoneIframeError()">{{ zoneIframeError() }}</div>
+
+                <ng-container *ngIf="!zoneIframeLoading() && !zoneIframeError()">
+                  <iframe *ngIf="isZonePdfPreview(zoneRecipientIdx()) && getZonePreviewDocUrl(zoneRecipientIdx()) as docUrl"
+                          [src]="docUrl"
+                          class="zone-preview-pdf"
+                          title="Aperçu PDF"></iframe>
+
+                  <img *ngIf="isZoneImagePreview(zoneRecipientIdx()) && getZonePreviewObjectUrl(zoneRecipientIdx()) as blobUrl"
+                       [src]="blobUrl"
+                       alt="Aperçu image"
+                       class="zone-preview-image" />
+
+                  <iframe *ngIf="!isZonePdfPreview(zoneRecipientIdx()) && !isZoneImagePreview(zoneRecipientIdx()) && getZonePreviewDocUrl(zoneRecipientIdx()) as docUrl"
+                          [src]="docUrl"
+                          class="zone-preview-iframe"
+                          title="Aperçu document"></iframe>
+
+                  <div class="zone-preview-unavailable-content" *ngIf="!isZoneDocxPreview(zoneRecipientIdx()) && !getZonePreviewObjectUrl(zoneRecipientIdx()) && !getZonePreviewDocUrl(zoneRecipientIdx())">
+                    <h4>Aperçu en préparation...</h4>
+                    <p>Le document est en cours de chargement. Si rien n'apparaît, cliquez ci-dessous.</p>
+                    <a *ngIf="getZonePreviewDoc(zoneRecipientIdx()) as zoneDoc"
+                       class="btn btn-outline btn-sm"
+                       [href]="api.getDocumentViewUrl(zoneDoc.id_document)"
+                       target="_blank"
+                       rel="noopener">
+                      Ouvrir le document
+                    </a>
+                  </div>
+                </ng-container>
+              </ng-template>
+
+              <!-- Overlay cliquable -->
+              <div
+                class="zone-placer-overlay"
+                *ngIf="!zonePanningMode() && !zoneDocxLoading() && !zoneIframeLoading() && !zoneDocxError() && !zoneIframeError()">
+                <div class="zone-placer-hint">
+                  📍 Cliquez pour placer la zone de <strong>{{ getRecipientLabel(zoneRecipientIdx()) }}</strong>
+                </div>
+
+                <!-- Marqueur zone active -->
+                <div *ngIf="hasZone(zoneRecipientIdx())"
+                     class="zone-placed-marker"
+                     [style.left.%]="getZoneX(zoneRecipientIdx())"
+                     [style.top.%]="getZoneY(zoneRecipientIdx())">
+                  <span class="zone-placed-label">✍ {{ getRecipientLabel(zoneRecipientIdx()) }}</span>
+                </div>
+
+                <!-- Marqueurs autres signataires (gris) -->
+                <ng-container *ngFor="let i of signatoryIndices()">
+                  <div *ngIf="hasZone(i) && i !== zoneRecipientIdx()"
+                       class="zone-placed-marker zone-placed-marker-other"
+                       [style.left.%]="getZoneX(i)"
+                       [style.top.%]="getZoneY(i)">
+                    <span class="zone-placed-label">{{ getRecipientLabel(i) }}</span>
+                  </div>
+                </ng-container>
+              </div>
             </div>
           </div>
         </div>
@@ -244,7 +300,7 @@
               <p>
                 Le document <strong>{{ zoneDoc.original_name }}</strong> ne peut pas être prévisualisé ici.
               </p>
-              <p>Utilisez un PDF ou une image (PNG/JPG) pour positionner la zone sans téléchargement automatique.</p>
+              <p>Formats pris en charge pour l'aperçu de zone : PDF, images (PNG/JPG) et DOCX.</p>
               <a class="btn btn-outline btn-sm" [href]="api.getDocumentViewUrl(zoneDoc.id_document)" target="_blank" rel="noopener">
                 Ouvrir le document
               </a>

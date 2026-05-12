@@ -84,7 +84,7 @@ interface NavItem {
 export class SidebarComponent {
   private items: NavItem[] = [
     { icon: '📊', label: 'Tableau de bord', route: '/dashboard' },
-    { icon: '📨', label: 'Enveloppes',       route: '/envelopes' },
+    { icon: '📨', label: 'Parapheur',        route: '/envelopes' },
     { icon: '📄', label: 'Documents',        route: '/documents' },
     { icon: '📋', label: 'Modèles',          route: '/templates' },
     { icon: '🔔', label: 'Notifications',    route: '/notifications' },

@@ -133,20 +133,36 @@ export class EnvelopesService {
     if (envelope.created_by !== userId) {
       throw new ForbiddenException("Vous n'êtes pas l'émetteur de cette enveloppe");
     }
-    if (envelope.status !== EnvelopeStatus.DRAFT) {
-      throw new BadRequestException('Cette enveloppe a déjà été envoyée');
+    if (![EnvelopeStatus.DRAFT, EnvelopeStatus.REVISION].includes(envelope.status)) {
+      throw new BadRequestException('Cette enveloppe ne peut pas être envoyée dans son état actuel');
     }
 
-    await this.db('t_envelopes').where('id_envelope', id).update({ status: EnvelopeStatus.SENT });
+    await this.db('t_envelopes').where('id_envelope', id).update({
+      status: EnvelopeStatus.SENT,
+      completed_at: null,
+    });
 
     const sender = await this.db('t_users').where('id_user', userId).first();
     const senderName = `${sender.first_name} ${sender.last_name}`;
 
-    // For sequential: only send to first recipient. For parallel: send to all.
+    // For sequential: only send to the next recipient in order.
+    // For revision, we resume from the recipient who returned the document.
     const recipients = envelope.recipients;
     const toNotify = envelope.circuit_type === 'SEQUENTIAL'
-      ? recipients.filter((r) => r.signing_order === 1)
-      : recipients;
+      ? (() => {
+          const lastSignedOrder = Math.max(
+            ...recipients
+              .filter((r) => r.status === RecipientStatus.SIGNED || r.status === RecipientStatus.APPROVED || r.status === RecipientStatus.DELEGATED)
+              .map((r) => r.signing_order),
+            0,
+          );
+          return recipients.filter(
+            (r) =>
+              r.signing_order === lastSignedOrder + 1 &&
+              (r.status === RecipientStatus.PENDING || r.status === RecipientStatus.RETURNED),
+          );
+        })()
+      : recipients.filter((r) => r.status === RecipientStatus.PENDING || r.status === RecipientStatus.RETURNED);
 
     for (const r of toNotify) {
       await this.db('t_recipients')
@@ -186,15 +202,21 @@ export class EnvelopesService {
     signatureImage?: string,
     useSavedSignature?: boolean,
     comment?: string,
-    signaturePosition?: { doc_id: number; x_ratio: number; y_ratio: number },
+    signaturePosition?: { doc_id: number; x_ratio: number; y_ratio: number; page_number?: number },
     useStamp?: boolean,
     stampImage?: string,
-    stampPosition?: { doc_id: number; x_ratio: number; y_ratio: number },
+    stampPosition?: { doc_id: number; x_ratio: number; y_ratio: number; page_number?: number },
   ) {
     const [recipient] = await this.db('t_recipients').where('token', token);
     if (!recipient) throw new NotFoundException('Lien de signature invalide');
     if (recipient.status === RecipientStatus.SIGNED) {
       throw new BadRequestException('Ce document a déjà été signé');
+    }
+
+    const isSignatory = recipient.role === 'SIGNATORY';
+    const isApprover = recipient.role === 'APPROVER';
+    if (!isSignatory && !isApprover) {
+      throw new BadRequestException('Ce rôle ne peut pas traiter ce document dans cette étape');
     }
 
     const [envelope] = await this.db('t_envelopes').where('id_envelope', recipient.id_envelope);
@@ -224,23 +246,37 @@ export class EnvelopesService {
       sigFile = userRow.signature_path;
     }
 
+    if (isSignatory && !sigFile) {
+      throw new BadRequestException('Une signature est obligatoire pour un signataire');
+    }
+
     let signedAttachment: { filename: string; path: string; contentType?: string } | undefined;
 
-    if (sigFile) {
+    if (sigFile && isSignatory) {
       // Zone prédéfinie par l'émetteur (prioritaire sur la position choisie par le signataire)
       const targetDocId = recipient.sig_doc_id
         || signaturePosition?.doc_id
         || (await this.db('t_envelope_documents').where('id_envelope', envelope.id_envelope).first())?.id_document;
       if (targetDocId) {
+        // Backward-compatible page decoding: y_ratio may encode page (page-1 + y).
+        const rawPredefY = recipient.sig_y_ratio != null ? Number(recipient.sig_y_ratio) : NaN;
+        const encodedPage = Number.isFinite(rawPredefY) && rawPredefY > 1 ? Math.floor(rawPredefY) + 1 : 1;
+        const decodedPredefY = Number.isFinite(rawPredefY) && rawPredefY > 1 ? (rawPredefY - Math.floor(rawPredefY)) : rawPredefY;
+        const hasPredefZone = recipient.sig_x_ratio != null && recipient.sig_y_ratio != null;
+        const signaturePage = hasPredefZone
+          ? Math.max(1, encodedPage || 1)
+          : Math.max(1, Math.floor(Number(signaturePosition?.page_number || 1)));
+
         const xRatio = Math.min(Math.max(
           recipient.sig_x_ratio != null ? Number(recipient.sig_x_ratio) : (signaturePosition?.x_ratio ?? 0.15), 0), 1);
         const yRatio = Math.min(Math.max(
-          recipient.sig_y_ratio != null ? Number(recipient.sig_y_ratio) : (signaturePosition?.y_ratio ?? 0.90), 0), 1);
+          recipient.sig_y_ratio != null ? (decodedPredefY || 0.90) : (signaturePosition?.y_ratio ?? 0.90), 0), 1);
 
         // Résoudre le chemin du cachet si demandé
         let resolvedStampPath: string | undefined;
         let stampX = 0.50;
         let stampY = 0.90;
+        let stampPage = Math.max(1, Math.floor(Number(stampPosition?.page_number || signaturePage || 1)));
         if (useStamp) {
           if (stampImage && stampImage.startsWith('data:image/')) {
             // Cachet fourni inline — sauvegarder comme cachet permanent de l'utilisateur
@@ -277,6 +313,7 @@ export class EnvelopesService {
           if (stampPosition) {
             stampX = Math.min(Math.max(stampPosition.x_ratio, 0), 1);
             stampY = Math.min(Math.max(stampPosition.y_ratio, 0), 1);
+            stampPage = Math.max(1, Math.floor(Number(stampPosition.page_number || stampPage || 1)));
           }
         }
 
@@ -287,10 +324,12 @@ export class EnvelopesService {
             sigFile,
             xRatio,
             yRatio,
+            signaturePage,
             envelope.created_by,
             resolvedStampPath,
             stampX,
             stampY,
+            stampPage,
           );
           if (signedDoc?.path && fs.existsSync(signedDoc.path)) {
             signedAttachment = {
@@ -309,12 +348,12 @@ export class EnvelopesService {
     }
 
     await this.db('t_recipients').where('id_recipient', recipient.id_recipient).update({
-      status: RecipientStatus.SIGNED,
+      status: isApprover ? RecipientStatus.APPROVED : RecipientStatus.SIGNED,
       signed_at: this.db.fn.now(),
       signing_comment: comment || null,
     });
 
-    await this.logAudit(envelope.id_envelope, 'DOCUMENT_SIGNED', recipient.id_user, ipAddress, {
+    await this.logAudit(envelope.id_envelope, isApprover ? 'DOCUMENT_APPROVED' : 'DOCUMENT_SIGNED', recipient.id_user, ipAddress, {
       recipient_email: recipient.email,
     });
 
@@ -331,14 +370,16 @@ export class EnvelopesService {
     // Notifier l'émetteur dans l'application
     await this.notificationsService.create(
       envelope.created_by,
-      `${recipient.first_name} ${recipient.last_name} a signé le document : "${envelope.title}"`,
+      isApprover
+        ? `${recipient.first_name} ${recipient.last_name} a vérifié/validé le document : "${envelope.title}"`
+        : `${recipient.first_name} ${recipient.last_name} a signé le document : "${envelope.title}"`,
       envelope.id_envelope,
     );
 
     // Check if all signed → complete or trigger next in sequence
     await this.checkAndAdvanceCircuit(envelope.id_envelope, sender);
 
-    return { message: 'Document signé avec succès' };
+    return { message: isApprover ? 'Document vérifié avec succès' : 'Document signé avec succès' };
   }
 
   private async applySignatureOnEnvelopeDocument(
@@ -347,10 +388,12 @@ export class EnvelopesService {
     signaturePath: string,
     xRatio: number,
     yRatio: number,
+    signaturePageNumber: number,
     ownerUserId: number,
     stampPath?: string,
     stampXRatio?: number,
     stampYRatio?: number,
+    stampPageNumber?: number,
   ): Promise<{ id_document: number; name: string; original_name: string; path: string; mime_type: string } | null> {
     const [link] = await this.db('t_envelope_documents')
       .where('id_envelope', envelopeId)
@@ -370,7 +413,10 @@ export class EnvelopesService {
       const sigBytes = fs.readFileSync(signaturePath);
       const pdfDoc = await PDFDocument.load(pdfBytes);
       const sigImage = await pdfDoc.embedPng(sigBytes);
-      const page = pdfDoc.getPages()[0];
+      const pages = pdfDoc.getPages();
+      if (!pages.length) return null;
+      const sigPageIndex = Math.min(Math.max(signaturePageNumber - 1, 0), pages.length - 1);
+      const page = pages[sigPageIndex];
       if (!page) return null;
 
       const pageWidth = page.getWidth();
@@ -393,13 +439,17 @@ export class EnvelopesService {
           stampPngBytes = await sharpFn(stampPath).png().toBuffer();
         }
         const stampImg = await pdfDoc.embedPng(stampPngBytes);
-        const stampWidth = pageWidth * 0.20;
+        const stPageIndex = Math.min(Math.max((stampPageNumber || signaturePageNumber || 1) - 1, 0), pages.length - 1);
+        const stampPage = pages[stPageIndex] || page;
+        const stampPageWidth = stampPage.getWidth();
+        const stampPageHeight = stampPage.getHeight();
+        const stampWidth = stampPageWidth * 0.20;
         const stampRatio = stampImg.height / stampImg.width;
         const stampHeight = stampWidth * stampRatio;
-        const stX = Math.min(Math.max((sx * pageWidth) - (stampWidth / 2), 0), pageWidth - stampWidth);
-        const stTopBased = (sy * pageHeight) - (stampHeight / 2);
-        const stY = Math.min(Math.max(pageHeight - stTopBased - stampHeight, 0), pageHeight - stampHeight);
-        page.drawImage(stampImg, { x: stX, y: stY, width: stampWidth, height: stampHeight, opacity: 0.88 });
+        const stX = Math.min(Math.max((sx * stampPageWidth) - (stampWidth / 2), 0), stampPageWidth - stampWidth);
+        const stTopBased = (sy * stampPageHeight) - (stampHeight / 2);
+        const stY = Math.min(Math.max(stampPageHeight - stTopBased - stampHeight, 0), stampPageHeight - stampHeight);
+        stampPage.drawImage(stampImg, { x: stX, y: stY, width: stampWidth, height: stampHeight, opacity: 0.88 });
       }
 
       const out = await pdfDoc.save();
@@ -809,6 +859,127 @@ export class EnvelopesService {
     return { message: 'Enveloppe annulée' };
   }
 
+  async replaceDocuments(envelopeId: number, userId: number, documentIds: number[]) {
+    const [env] = await this.db('t_envelopes').where('id_envelope', envelopeId);
+    if (!env) throw new NotFoundException('Enveloppe non trouvée');
+    if (env.created_by !== userId) throw new ForbiddenException('Accès refusé');
+    if (![EnvelopeStatus.DRAFT, EnvelopeStatus.REVISION].includes(env.status)) {
+      throw new BadRequestException('Les documents ne peuvent être remplacés que sur un brouillon ou une enveloppe en révision');
+    }
+    if (!Array.isArray(documentIds) || documentIds.length === 0) {
+      throw new BadRequestException('Ajoutez au moins un document corrigé');
+    }
+
+    const trx = await this.db.transaction();
+    try {
+      await trx('t_envelope_documents').where('id_envelope', envelopeId).delete();
+      for (const documentId of documentIds) {
+        await trx('t_envelope_documents').insert({ id_envelope: envelopeId, id_document: documentId });
+      }
+
+      if (env.status === EnvelopeStatus.REVISION) {
+        await trx('t_recipients')
+          .where('id_envelope', envelopeId)
+          .whereIn('status', [RecipientStatus.RETURNED, RecipientStatus.REJECTED])
+          .update({ status: RecipientStatus.PENDING, rejection_reason: null });
+      }
+
+      await trx.commit();
+      await this.logAudit(envelopeId, 'DOCUMENTS_REPLACED', userId, null, { document_ids: documentIds });
+      return this.findById(envelopeId);
+    } catch (error) {
+      await trx.rollback();
+      throw error;
+    }
+  }
+
+  async forwardByCreator(envelopeId: number, userId: number, dto: ForwardRecipientDto) {
+    if (!dto.forward_email.endsWith('@cgrae.ci')) {
+      throw new BadRequestException('Le destinataire doit avoir un email @cgrae.ci');
+    }
+
+    const [env] = await this.db('t_envelopes').where('id_envelope', envelopeId);
+    if (!env) throw new NotFoundException('Enveloppe non trouvée');
+    if (env.created_by !== userId) throw new ForbiddenException('Accès refusé');
+    if (![EnvelopeStatus.REVISION, EnvelopeStatus.IN_PROGRESS, EnvelopeStatus.SENT].includes(env.status)) {
+      throw new BadRequestException('Le renvoi vers un nouveau destinataire est disponible en révision ou en cours');
+    }
+
+    const recipients = await this.db('t_recipients').where('id_envelope', envelopeId);
+    const maxOrder = Math.max(...recipients.map((r) => Number(r.signing_order || 0)), 0);
+    const nextOrder = maxOrder + 1;
+    const newToken = uuidv4();
+
+    await this.db.transaction(async (trx) => {
+      // Le créateur applique la correction et poursuit le circuit: on marque les retours comme traités.
+      await trx('t_recipients')
+        .where('id_envelope', envelopeId)
+        .whereIn('status', [RecipientStatus.RETURNED, RecipientStatus.REJECTED])
+        .update({ status: RecipientStatus.DELEGATED });
+
+      await trx('t_recipients').insert({
+        id_envelope: envelopeId,
+        email: dto.forward_email,
+        first_name: dto.forward_first_name,
+        last_name: dto.forward_last_name,
+        role: 'SIGNATORY',
+        signing_order: nextOrder,
+        status: RecipientStatus.SENT,
+        token: newToken,
+      });
+
+      await trx('t_envelopes').where('id_envelope', envelopeId).update({
+        status: EnvelopeStatus.IN_PROGRESS,
+        completed_at: null,
+      });
+    });
+
+    const [sender] = await this.db('t_users').where('id_user', userId);
+    this.emailService.sendSignatureRequest(
+      dto.forward_email,
+      `${dto.forward_first_name} ${dto.forward_last_name}`,
+      env.title,
+      `${sender.first_name} ${sender.last_name}`,
+      newToken,
+      env.message,
+    ).catch(err => console.error('[Email] sendSignatureRequest (creator-forward) failed:', err));
+
+    const [nextUser] = await this.db('t_users').where('email', dto.forward_email).select('id_user');
+    if (nextUser) {
+      await this.notificationsService.create(
+        nextUser.id_user,
+        `Vous avez un document à analyser/signer : "${env.title}" (renvoyé par ${sender.first_name} ${sender.last_name})`,
+        envelopeId,
+      );
+    }
+
+    await this.logAudit(envelopeId, 'CIRCUIT_FORWARDED_BY_CREATOR', userId, null, {
+      to: dto.forward_email,
+      signing_order: nextOrder,
+    });
+
+    return this.findById(envelopeId);
+  }
+
+  async closeByCreator(envelopeId: number, userId: number) {
+    const [env] = await this.db('t_envelopes').where('id_envelope', envelopeId);
+    if (!env) throw new NotFoundException('Enveloppe non trouvée');
+    if (env.created_by !== userId) throw new ForbiddenException('Accès refusé');
+    if ([EnvelopeStatus.CANCELLED, EnvelopeStatus.EXPIRED].includes(env.status)) {
+      throw new BadRequestException('Cette enveloppe ne peut pas être clôturée dans son état actuel');
+    }
+
+    await this.db('t_envelopes').where('id_envelope', envelopeId).update({
+      status: EnvelopeStatus.COMPLETED,
+      completed_at: this.db.fn.now(),
+    });
+
+    await this.archiveEnvelopeDocumentsForCreator(envelopeId, userId);
+    await this.logAudit(envelopeId, 'ENVELOPE_CLOSED_BY_CREATOR', userId, null, {});
+
+    return this.findById(envelopeId);
+  }
+
   private async checkAndAdvanceCircuit(envelopeId: number, sender: any) {
     const allRecipients = await this.db('t_recipients')
       .where('id_envelope', envelopeId)
@@ -824,6 +995,7 @@ export class EnvelopesService {
         status: EnvelopeStatus.COMPLETED,
         completed_at: this.db.fn.now(),
       });
+      await this.archiveEnvelopeDocumentsForCreator(envelopeId, sender.id_user);
       // Notify all (fire-and-forget)
       for (const r of allRecipients) {
         this.emailService.sendEnvelopeCompleted(r.email, `${r.first_name} ${r.last_name}`, env.title)
@@ -836,7 +1008,7 @@ export class EnvelopesService {
       // Find next pending
       const maxSigned = Math.max(
         ...allRecipients
-          .filter((r) => r.status === RecipientStatus.SIGNED || r.status === RecipientStatus.DELEGATED)
+          .filter((r) => r.status === RecipientStatus.SIGNED || r.status === RecipientStatus.APPROVED || r.status === RecipientStatus.DELEGATED)
           .map((r) => r.signing_order),
         0,
       );
@@ -862,6 +1034,26 @@ export class EnvelopesService {
           );
         }
       }
+    }
+  }
+
+  private async archiveEnvelopeDocumentsForCreator(envelopeId: number, creatorId: number) {
+    const documentRows = await this.db('t_envelope_documents')
+      .where('id_envelope', envelopeId)
+      .select('id_document');
+    for (const row of documentRows) {
+      await this.db('t_user_document_archives')
+        .insert({
+          id_user: creatorId,
+          id_document: row.id_document,
+          is_archived: true,
+          archived_at: this.db.fn.now(),
+        })
+        .onConflict(['id_user', 'id_document'])
+        .merge({
+          is_archived: true,
+          archived_at: this.db.fn.now(),
+        });
     }
   }
 

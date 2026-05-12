@@ -74,7 +74,7 @@ export class HeaderComponent implements OnInit, OnDestroy {
   get pageTitle(): string {
     const map: Record<string, string> = {
       '/dashboard':    'Tableau de bord',
-      '/envelopes':    'Enveloppes',
+      '/envelopes':    'Parapheur',
       '/documents':    'Documents',
       '/templates':    'Modèles',
       '/notifications':'Notifications',

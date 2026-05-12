@@ -71,6 +71,13 @@ export class CreateEnvelopeDto {
   expires_at?: string;
 }
 
+export class UpdateEnvelopeDocumentsDto {
+  @ApiProperty({ type: [Number], description: 'IDs des documents corrigés à associer à l\'enveloppe' })
+  @IsArray()
+  @IsNumber({}, { each: true })
+  document_ids: number[];
+}
+
 export class RejectEnvelopeDto {
   @ApiProperty({ example: 'Clauses contractuelles à revoir' })
   @IsString()

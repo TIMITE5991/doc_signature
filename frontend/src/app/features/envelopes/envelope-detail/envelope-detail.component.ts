@@ -1,5 +1,6 @@
 import { Component, ChangeDetectionStrategy, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
 import { RouterLink, ActivatedRoute, Router } from '@angular/router';
 import { ApiService } from '../../../core/services/api.service';
 import { AuthService } from '../../../core/services/auth.service';
@@ -9,7 +10,7 @@ import { Envelope, AuditLog, Recipient } from '../../../core/models';
   selector: 'app-envelope-detail',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, RouterLink],
+  imports: [CommonModule, FormsModule, RouterLink],
   template: `
     <div class="page-header" *ngIf="envelope()">
       <div>
@@ -25,9 +26,14 @@ import { Envelope, AuditLog, Recipient } from '../../../core/models';
           ✍️ Traiter
         </a>
         <button class="btn btn-primary"
-                *ngIf="envelope()!.status === 'DRAFT' && canSend()"
+                *ngIf="canSend() && (envelope()!.status === 'DRAFT' || envelope()!.status === 'REVISION')"
                 (click)="send()">
-          ✉️ Envoyer
+          ✉️ {{ envelope()!.status === 'REVISION' ? 'Renvoyer' : 'Envoyer' }}
+        </button>
+        <button class="btn btn-success"
+          *ngIf="canCloseCircuit()"
+          (click)="closeCircuit()">
+          ✅ Clôturer
         </button>
         <button class="btn btn-danger btn-sm"
                 *ngIf="canCancel()"
@@ -83,6 +89,50 @@ import { Envelope, AuditLog, Recipient } from '../../../core/models';
             </div>
             <div class="empty-state" style="padding:16px" *ngIf="!envelope()!.documents?.length">
               Aucun document
+            </div>
+          </div>
+
+          <div class="card mt-2" *ngIf="canSend() && envelope()!.status === 'REVISION'">
+            <h3 class="section-title">Corriger le document</h3>
+            <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">
+              Téléversez la version corrigée des fichiers joints, puis renvoyez le parapheur pour poursuivre le circuit.
+            </p>
+            <input type="file" multiple (change)="onCorrectionFilesSelected($event)" />
+            <div class="empty-state" style="padding:12px;margin-top:12px" *ngIf="!correctionFiles().length">
+              Aucun fichier corrigé sélectionné
+            </div>
+            <div *ngIf="correctionFiles().length" style="margin-top:12px;font-size:13px;color:var(--text-muted)">
+              <div *ngFor="let file of correctionFiles()">• {{ file.name }}</div>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">
+              <button class="btn btn-primary" type="button" [disabled]="correctionLoading() || !correctionFiles().length" (click)="applyCorrectionsAndResend()">
+                {{ correctionLoading() ? 'Mise à jour...' : '💾 Enregistrer et renvoyer' }}
+              </button>
+              <button class="btn btn-outline" type="button" [disabled]="correctionLoading() || !correctionFiles().length" (click)="clearCorrectionFiles()">
+                Réinitialiser
+              </button>
+            </div>
+          </div>
+
+          <div class="card mt-2" *ngIf="canForwardByCreator()">
+            <h3 class="section-title">Renvoyer à un autre destinataire</h3>
+            <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">
+              Après correction, vous pouvez relancer le circuit vers une autre personne pour vérification/analyse.
+            </p>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <input type="text" placeholder="Prénom" [(ngModel)]="forwardFirstName" />
+              <input type="text" placeholder="Nom" [(ngModel)]="forwardLastName" />
+            </div>
+            <div style="margin-top:10px">
+              <input type="email" placeholder="destinataire@cgrae.ci" style="width:100%" [(ngModel)]="forwardEmail" />
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">
+              <button class="btn btn-primary" type="button" [disabled]="forwardLoading()" (click)="forwardToNextRecipient()">
+                {{ forwardLoading() ? 'Envoi...' : '🔁 Ajouter et notifier' }}
+              </button>
+              <button class="btn btn-outline" type="button" [disabled]="forwardLoading()" (click)="resetForwardForm()">
+                Réinitialiser
+              </button>
             </div>
           </div>
         </div>
@@ -155,10 +205,16 @@ import { Envelope, AuditLog, Recipient } from '../../../core/models';
 export class EnvelopeDetailComponent implements OnInit {
   loading      = signal(true);
   loadingAudit = signal(true);
+  correctionLoading = signal(false);
+  forwardLoading = signal(false);
   error        = signal('');
   successMsg   = signal('');
   envelope     = signal<Envelope | null>(null);
   auditLogs    = signal<AuditLog[]>([]);
+  correctionFiles = signal<File[]>([]);
+  forwardFirstName = '';
+  forwardLastName = '';
+  forwardEmail = '';
 
   constructor(
     private route: ActivatedRoute,
@@ -199,6 +255,58 @@ export class EnvelopeDetailComponent implements OnInit {
     });
   }
 
+  onCorrectionFilesSelected(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    this.correctionFiles.set(Array.from(input.files ?? []));
+  }
+
+  clearCorrectionFiles(): void {
+    this.correctionFiles.set([]);
+  }
+
+  applyCorrectionsAndResend(): void {
+    if (!this.envelope() || !this.correctionFiles().length) return;
+    this.correctionLoading.set(true);
+    this.error.set('');
+
+    const uploadNext = (index: number, uploadedIds: number[]) => {
+      if (index >= this.correctionFiles().length) {
+        this.api.replaceEnvelopeDocuments(this.envelope()!.id_envelope, uploadedIds).subscribe({
+          next: (env) => {
+            this.envelope.set(env);
+            this.api.sendEnvelope(env.id_envelope).subscribe({
+              next: (sentEnv) => {
+                this.envelope.set(sentEnv);
+                this.successMsg.set('Corrections enregistrées et parapheur renvoyé avec succès.');
+                this.correctionFiles.set([]);
+                this.correctionLoading.set(false);
+              },
+              error: (err) => {
+                this.error.set(err.message);
+                this.correctionLoading.set(false);
+              },
+            });
+          },
+          error: (err) => {
+            this.error.set(err.message);
+            this.correctionLoading.set(false);
+          },
+        });
+        return;
+      }
+
+      this.api.uploadDocument(this.correctionFiles()[index]).subscribe({
+        next: (doc) => uploadNext(index + 1, [...uploadedIds, doc.id_document]),
+        error: (err) => {
+          this.error.set(err.message);
+          this.correctionLoading.set(false);
+        },
+      });
+    };
+
+    uploadNext(0, []);
+  }
+
   cancel(): void {
     if (!confirm('Annuler cette enveloppe ?')) return;
     const id = this.envelope()!.id_envelope;
@@ -214,6 +322,63 @@ export class EnvelopeDetailComponent implements OnInit {
 
   canSend(): boolean {
     return this.auth.user?.id_user === this.envelope()?.created_by;
+  }
+
+  canForwardByCreator(): boolean {
+    const s = this.envelope()?.status;
+    return this.canSend() && (s === 'REVISION' || s === 'IN_PROGRESS' || s === 'SENT');
+  }
+
+  canCloseCircuit(): boolean {
+    const s = this.envelope()?.status;
+    return this.canSend() && (s === 'IN_PROGRESS' || s === 'REVISION' || s === 'SENT');
+  }
+
+  resetForwardForm(): void {
+    this.forwardFirstName = '';
+    this.forwardLastName = '';
+    this.forwardEmail = '';
+  }
+
+  forwardToNextRecipient(): void {
+    if (!this.envelope()) return;
+    const email = this.forwardEmail.trim().toLowerCase();
+    const firstName = this.forwardFirstName.trim();
+    const lastName = this.forwardLastName.trim();
+    if (!firstName || !lastName || !/^[^@]+@cgrae\.ci$/i.test(email)) {
+      this.error.set('Veuillez renseigner prénom, nom et un email @cgrae.ci valide.');
+      return;
+    }
+    this.forwardLoading.set(true);
+    this.error.set('');
+    this.api.forwardEnvelopeByCreator(this.envelope()!.id_envelope, {
+      forward_email: email,
+      forward_first_name: firstName,
+      forward_last_name: lastName,
+    }).subscribe({
+      next: (env) => {
+        this.envelope.set(env);
+        this.successMsg.set('Nouveau destinataire ajouté et notifié.');
+        this.resetForwardForm();
+        this.forwardLoading.set(false);
+      },
+      error: (err) => {
+        this.error.set(err.message);
+        this.forwardLoading.set(false);
+      },
+    });
+  }
+
+  closeCircuit(): void {
+    if (!this.envelope()) return;
+    if (!confirm('Clôturer ce circuit et archiver les documents dans la GED ?')) return;
+    this.api.closeEnvelopeByCreator(this.envelope()!.id_envelope).subscribe({
+      next: (env) => {
+        this.envelope.set(env);
+        this.successMsg.set('Circuit clôturé. Documents archivés dans la GED du créateur.');
+      },
+      error: (err) => this.error.set(err.message),
+    });
   }
 
   canCancel(): boolean {
@@ -238,12 +403,12 @@ export class EnvelopeDetailComponent implements OnInit {
   }
 
   circuitLabel(c: string): string {
-    const m: Record<string, string> = { SEQUENTIAL: 'Séquentiel', PARALLEL: 'Parallèle', MIXED: 'Mixte', CONDITIONAL: 'Conditionnel' };
+    const m: Record<string, string> = { SEQUENTIAL: 'Séquentiel strict', PARALLEL: 'Parallèle', MIXED: 'Mixte', CONDITIONAL: 'Conditionnel' };
     return m[c] || c;
   }
 
   roleLabel(r: string): string {
-    const m: Record<string, string> = { SIGNATORY: 'Signataire', APPROVER: 'Approbateur', VIEWER: 'Visualisateur', DELEGATOR: 'Délégateur' };
+    const m: Record<string, string> = { SIGNATORY: 'Signataire', APPROVER: 'Vérificateur', VIEWER: 'Visualisateur', DELEGATOR: 'Délégateur' };
     return m[r] || r;
   }
 
@@ -258,6 +423,9 @@ export class EnvelopeDetailComponent implements OnInit {
       DOCUMENT_SIGNED: '✍️ Document signé', DOCUMENT_REJECTED: '❌ Document rejeté',
       DOCUMENT_RETURNED: '↩️ Retour pour corrections', DOCUMENT_FORWARDED: '🔁 Document renvoyé à un destinataire',
       ENVELOPE_COMPLETED: '✅ Processus terminé',
+      ENVELOPE_CLOSED_BY_CREATOR: '✅ Circuit clôturé par le créateur',
+      CIRCUIT_FORWARDED_BY_CREATOR: '🔁 Circuit relancé vers un nouveau destinataire',
+      DOCUMENTS_REPLACED: '🗂 Documents corrigés remplacés',
       ENVELOPE_CANCELLED: '🚫 Enveloppe annulée', SIGNATURE_DELEGATED: '🔀 Signature déléguée',
     };
     return m[a] || a;

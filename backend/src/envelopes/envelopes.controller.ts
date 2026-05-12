@@ -7,6 +7,7 @@ import { Response } from 'express';
 import { EnvelopesService } from './envelopes.service';
 import {
   CreateEnvelopeDto,
+  UpdateEnvelopeDocumentsDto,
   RejectEnvelopeDto,
   DelegateDto,
   ReturnCorrectionDto,
@@ -67,6 +68,41 @@ export class EnvelopesController {
     return this.envelopesService.cancel(id, req.user.id_user);
   }
 
+  @Post(':id/documents')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Remplacer les documents associés à une enveloppe' })
+  updateDocuments(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateEnvelopeDocumentsDto,
+    @Request() req,
+  ) {
+    return this.envelopesService.replaceDocuments(id, req.user.id_user, dto.document_ids);
+  }
+
+  @Post(':id/forward')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Renvoyer le circuit vers un nouveau destinataire (créateur)' })
+  forwardByCreator(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ForwardRecipientDto,
+    @Request() req,
+  ) {
+    return this.envelopesService.forwardByCreator(id, req.user.id_user, dto);
+  }
+
+  @Post(':id/close')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Clôturer le circuit par le créateur et archiver dans la GED' })
+  closeByCreator(
+    @Param('id', ParseIntPipe) id: number,
+    @Request() req,
+  ) {
+    return this.envelopesService.closeByCreator(id, req.user.id_user);
+  }
+
   // Public routes (no JWT - accessed via token link)
   @Get('sign/:token')
   @ApiOperation({ summary: '(Public) Obtenir l\'enveloppe via lien de signature' })
@@ -83,10 +119,10 @@ export class EnvelopesController {
       signature_image?: string;
       use_saved_signature?: boolean;
       comment?: string;
-      signature_position?: { doc_id: number; x_ratio: number; y_ratio: number };
+      signature_position?: { doc_id: number; x_ratio: number; y_ratio: number; page_number?: number };
       use_stamp?: boolean;
       stamp_image?: string;
-      stamp_position?: { doc_id: number; x_ratio: number; y_ratio: number };
+      stamp_position?: { doc_id: number; x_ratio: number; y_ratio: number; page_number?: number };
     },
   ) {
     return this.envelopesService.sign(

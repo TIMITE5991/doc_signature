@@ -73,66 +73,22 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
 
         <!-- LEFT : visualiseur de document -->
         <div class="viewer-panel">
-          <div class="viewer-header">
-            <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0">
-              <span style="white-space:nowrap">📄 {{ displayDocName(activeDoc()?.original_name || 'Document') }}</span>
-              <div class="doc-tabs" *ngIf="envelope()!.documents.length > 1">
-                <button *ngFor="let doc of envelope()!.documents; let i = index"
-                  [class.active]="activeDocIndex() === i"
-                  (click)="selectDoc(i)" class="tab-btn">
-                  Doc {{ i + 1 }}
-                </button>
-              </div>
-            </div>
-            <div class="viewer-controls">
-              <button type="button" class="ctrl-btn" (click)="goToSignatureZone()" title="Aller à la zone de signature">📍</button>
-              <button type="button" class="ctrl-btn" *ngIf="useStamp()" (click)="goToStampZone()" title="Aller à la zone du cachet">🏷</button>
-              <button type="button" class="ctrl-btn" [title]="panningMode() ? 'Mode signature (Ctrl+Scroll pour zoom)' : 'Mode panoramique (Pan)'" (click)="togglePanMode()" [class.active]="panningMode()">
-                {{ panningMode() ? '✏️' : '✋' }}
-              </button>
-              <button type="button" class="ctrl-btn" (click)="zoomOut()" [disabled]="zoom() <= 50" title="Dézoomer">🔍−</button>
-              <span style="font-size:12px;font-weight:600;min-width:45px;text-align:center">{{ zoom() }}%</span>
-              <button type="button" class="ctrl-btn" (click)="zoomIn()" [disabled]="zoom() >= 300" title="Zoomer">🔍+</button>
-              <button type="button" class="ctrl-btn" (click)="resetZoom()" title="Réinitialiser">↺</button>
-            </div>
-          </div>
-
-          <div class="viewer-mode-hint" *ngIf="isPdf()">
-            {{ panningMode() ? 'Mode ✋ actif: faites défiler le PDF normalement, puis repassez en ✏️ pour placer la signature/cachet.' : 'Mode ✏️ actif: cliquez pour positionner la signature/cachet.' }}
-          </div>
-
-          <!-- Navigation bar -->
-          <div class="viewer-nav-bar">
-            <div class="nav-label">Parcourir :</div>
-            <input type="range" class="nav-slider" min="0" max="100" [value]="overviewPercent()" 
-              (change)="scrollToPercentage(0, parseInt($any($event.target).value))" 
-              title="Glissez pour naviguer dans le document" />
-            <span class="nav-percent">{{ overviewPercent() }}%</span>
-          </div>
-
           <!-- Viewer container avec zoom/pan -->
           <div class="viewer-container unified-viewer"
-            [style.transform]="'scale(' + (zoom() / 100) + ') translate(' + panX() + 'px, ' + panY() + 'px)'"
-            (wheel)="onDocumentWheel($event)"
-            (scroll)="onViewerContainerScroll($event)"
-            [class.pan-mode]="panningMode()">
-
-            <!-- Document type indicator -->
-            <div class="doc-type-badge" *ngIf="cachedSafeUrl()">
-              <span *ngIf="isPdf()">📑 PDF</span>
-              <span *ngIf="isImage()">🖼️ Image</span>
-              <span *ngIf="isDocx()">📝 Word</span>
-              <span *ngIf="isXlsx()">📊 Excel</span>
-              <span *ngIf="isGenericIframeType()">📎 Document</span>
-            </div>
+            (scroll)="onViewerContainerScroll($event)">
 
             <!-- PDF viewer intégré -->
             <div *ngIf="isPdf()" class="doc-wrapper pdf-wrapper" (pointerdown)="onDocumentPan($event, $any($event.currentTarget).parentElement)" (scroll)="onViewerContainerScroll($event)">
-              <iframe *ngIf="cachedSafeUrl()"
-                [src]="cachedSafeUrl()!"
-                class="doc-iframe"
-                title="Visualiseur PDF">
-              </iframe>
+              <div class="pdf-pages-strip" *ngIf="cachedSafeUrl()">
+                <div class="pdf-page-card" *ngFor="let p of pdfPages()">
+                  <div class="pdf-page-head">Page {{ p }} / {{ pdfTotalPages() }}</div>
+                  <iframe
+                    [src]="pdfPageUrl(p)"
+                    class="doc-iframe"
+                    [title]="'Page ' + p">
+                  </iframe>
+                </div>
+              </div>
               <div *ngIf="!cachedSafeUrl()" class="no-doc">PDF indisponible</div>
             </div>
 
@@ -241,31 +197,23 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
             </textarea>
           </div>
 
-          <!-- Pad de signature -->
-          <div class="sig-section" *ngIf="recipient()!.role === 'SIGNATORY' || recipient()!.role === 'APPROVER'">
+          <!-- Pad de signature (signataire uniquement) -->
+          <div class="sig-section" *ngIf="recipient()!.role === 'SIGNATORY'">
             <div class="sig-header">
               <span class="field-label">✍️ Votre signature</span>
-              <button type="button" class="btn btn-outline btn-sm" *ngIf="signatureMode() === 'draw'" (click)="clearCanvas()">🗑 Effacer</button>
-              <button type="button" class="btn btn-outline btn-sm" *ngIf="signatureMode() === 'upload'" (click)="clearUploadedSignature()">🗑 Retirer</button>
+              <button type="button" class="btn btn-outline btn-sm" *ngIf="uploadedSignaturePreview()" (click)="clearUploadedSignature()">🗑 Retirer</button>
             </div>
             <p class="hint-text" style="margin-bottom:4px;" *ngIf="!hasPredefZone()">📍 Cliquez sur le document (gauche) pour repositionner la zone de signature.</p>
             <p class="hint-text" style="margin-bottom:4px;background:#e8fff5;border:1px solid #a8e6c9;border-radius:6px;padding:6px 10px;" *ngIf="hasPredefZone()">📌 L'emplacement de votre signature a été fixé par l'émetteur du document.</p>
 
-            <div class="sig-mode-switch">
-              <button type="button" class="btn btn-outline btn-sm" [class.active]="signatureMode() === 'draw'" (click)="setSignatureMode('draw')">✍️ Dessiner (stylet/souris)</button>
-              <button type="button" class="btn btn-outline btn-sm" [class.active]="signatureMode() === 'upload'" (click)="setSignatureMode('upload')">📂 Télécharger image</button>
-              <button type="button" class="btn btn-outline btn-sm" *ngIf="recipient()?.has_signature" (click)="useStoredSignature()">✍️ Ma signature</button>
-            </div>
-
             <div class="position-controls" *ngIf="!hasPredefZone()">
-              <label>Position signature X: {{ sigXPercent() }}%</label>
-              <input type="range" min="0" max="100" [value]="sigXPercent()" (input)="updateSigX($any($event.target).value)">
-              <label>Position signature Y: {{ sigYPercent() }}%</label>
-              <input type="range" min="0" max="100" [value]="sigYPercent()" (input)="updateSigY($any($event.target).value)">
+              <label>Page signature: {{ signaturePage() }}</label>
+              <input type="number" min="1" [value]="signaturePage()" (input)="updateSigPage($any($event.target).value)">
+              <p class="hint-text" style="margin:8px 0 0 0">Positionnez la signature directement sur le document avec un clic ou en glissant le marqueur ✍.</p>
             </div>
 
           <!-- Section cachet -->
-          <div class="stamp-section" *ngIf="recipient()!.role === 'SIGNATORY' || recipient()!.role === 'APPROVER'">
+          <div class="stamp-section" *ngIf="recipient()!.role === 'SIGNATORY'">
             <div class="stamp-toggle-row">
               <label class="stamp-toggle-label">
                 <input type="checkbox" [checked]="useStamp()" (change)="toggleStamp($event)">
@@ -307,31 +255,23 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
               </button>
 
               <div class="position-controls" *ngIf="useStamp()">
-                <label>Position cachet X: {{ stampXPercent() }}%</label>
-                <input type="range" min="0" max="100" [value]="stampXPercent()" (input)="updateStampX($any($event.target).value)">
-                <label>Position cachet Y: {{ stampYPercent() }}%</label>
-                <input type="range" min="0" max="100" [value]="stampYPercent()" (input)="updateStampY($any($event.target).value)">
+                <label>Page cachet: {{ stampPage() }}</label>
+                <input type="number" min="1" [value]="stampPage()" (input)="updateStampPage($any($event.target).value)">
+                <p class="hint-text" style="margin:8px 0 0 0">Positionnez le cachet directement sur le document avec un clic ou en glissant le marqueur 🏷.</p>
               </div>
             </div>
           </div>
-            <canvas *ngIf="signatureMode() === 'draw'" #sigCanvas width="600" height="140"
-              style="width:100%;height:140px;border:2px dashed #0a7c4e;border-radius:8px;cursor:crosshair;touch-action:none;background:#f9fffe;display:block;"
-              (pointerdown)="startDraw($event)"
-              (pointermove)="draw($event)"
-              (pointerup)="endDraw()"
-              (pointerleave)="endDraw()">
-            </canvas>
-
-            <div *ngIf="signatureMode() === 'upload'" class="sig-upload-box">
+            <div class="sig-upload-box">
               <label class="btn btn-outline btn-sm" style="cursor:pointer;margin:0">
                 📂 Choisir un fichier signature
                 <input type="file" accept="image/png,image/jpeg" style="display:none" (change)="onSignatureFileChange($event)">
               </label>
               <img *ngIf="uploadedSignaturePreview()" [src]="uploadedSignaturePreview()!" alt="Signature importée" class="sig-upload-preview" />
+              <button type="button" class="btn btn-outline btn-sm" *ngIf="uploadedSignaturePreview()" (click)="clearUploadedSignature()">🗑 Retirer</button>
             </div>
 
-            <p class="hint-text">Compatible stylet, souris et tactile.</p>
-            <div class="error-msg" *ngIf="sigError()">{{ signatureMode() === 'upload' ? 'Veuillez importer une image de signature.' : 'Veuillez tracer votre signature avant de signer.' }}</div>
+            <p class="hint-text">Importez une image PNG ou JPEG de votre signature.</p>
+            <div class="error-msg" *ngIf="sigError()">Veuillez importer une image de signature.</div>
           </div>
 
           <div class="error-msg" *ngIf="signErrorMessage()" style="background:#fff1f2;border:1px solid #fecdd3;color:#9f1239;padding:8px 10px;border-radius:6px;">
@@ -341,12 +281,14 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
           <!-- Actions -->
           <div class="signing-actions">
             <button class="btn btn-success btn-lg" (click)="sign()" [disabled]="processing()">
-              ✍️ {{ processing() ? 'Traitement...' : 'Confirmer la signature' }}
+              {{ recipient()!.role === 'APPROVER'
+                  ? (processing() ? 'Traitement...' : '✅ Valider la vérification')
+                  : (processing() ? 'Traitement...' : '✍️ Confirmer la signature') }}
             </button>
             <button class="btn btn-return" (click)="step.set('return')" [disabled]="processing()">
               ↩️ Retour pour corrections
             </button>
-            <button class="btn btn-outline" (click)="step.set('reject')" [disabled]="processing()">
+            <button class="btn btn-outline" (click)="step.set('reject')" [disabled]="processing()" *ngIf="recipient()!.role !== 'APPROVER'">
               ❌ Rejeter le document
             </button>
             <button class="btn btn-outline" (click)="step.set('delegate')" [disabled]="processing()"
@@ -477,7 +419,7 @@ export class SigningComponent implements OnInit {
   errorDetail = signal('Ce lien de signature n\'est plus valide. Veuillez contacter l\'émetteur du document.');
   doneMessage = signal('');
   sigError    = signal(false);
-  signatureMode = signal<'draw' | 'upload'>('draw');
+  signatureMode = signal<'upload'>('upload');
   uploadedSignaturePreview = signal<string | null>(null);
   useSavedSignature = signal(false);
   activeDocIndex = signal(0);
@@ -485,6 +427,9 @@ export class SigningComponent implements OnInit {
   cachedDocUrl = signal<string>('');
   cachedSafeUrl = signal<SafeResourceUrl | null>(null);
   signatureZone = signal<{ x: number; y: number } | null>(null);
+  signaturePage = signal(1);
+  pdfPage       = signal(1);
+  pdfTotalPages = signal(1);
   xlsxHtml    = signal<SafeHtml | null>(null);
   xlsxLoading = signal(false);
   // Cachet
@@ -492,6 +437,7 @@ export class SigningComponent implements OnInit {
   hasStoredStamp    = signal(false);
   uploadedStampPreview = signal<string | null>(null);
   stampZone         = signal<{ x: number; y: number }>({ x: 0.50, y: 0.90 });
+  stampPage         = signal(1);
   zoneTarget        = signal<'signature' | 'stamp'>('signature');
   draggingTarget    = signal<'signature' | 'stamp' | null>(null);
   /** true = zone définie par l'émetteur → l'aperçu est verrouillé */
@@ -557,18 +503,18 @@ export class SigningComponent implements OnInit {
           this.hasStoredStamp.set(true);
           this.useStamp.set(true);
         }
-        if (r?.has_signature) {
-          this.useStoredSignature();
-        }
         if (r?.status === 'SIGNED' || r?.status === 'APPROVED') {
           this.step.set('already-signed');
         } else {
           this.step.set('sign');
           // Initialize cached URL for first document
           const url = this.rawDocUrl();
+          this.pdfPage.set(1);
+          this.pdfTotalPages.set(1);
           this.cachedDocUrl.set(url);
           this.cachedSafeUrl.set(url ? this.sanitizer.bypassSecurityTrustResourceUrl(url) : null);
           this.cdr.detectChanges();
+          this.loadPdfPageCountIfNeeded();
           setTimeout(() => { this.renderDocxPreviewIfNeeded(); this.renderXlsxIfNeeded(); }, 50);
         }
       },
@@ -581,20 +527,10 @@ export class SigningComponent implements OnInit {
   }
 
   useStoredSignature(): void {
-    if (!this.recipient()?.has_signature) {
-      this.useSavedSignature.set(false);
-      this.uploadedSignaturePreview.set(null);
-      this.signErrorMessage.set('Aucune signature n\'est enregistrée dans votre profil. Ajoutez-en une dans Mon profil ou utilisez Dessiner / Télécharger image.');
-      this.signatureMode.set('draw');
-      return;
-    }
-
-    this.signatureMode.set('upload');
-    this.useSavedSignature.set(true);
-    this.uploadedSignaturePreview.set(this.api.getPublicSignatureUrl(this.token));
-    this.sigError.set(false);
-    this.signErrorMessage.set('');
-    this.cdr.detectChanges();
+    this.uploadedSignaturePreview.set(null);
+    this.useSavedSignature.set(false);
+    this.sigError.set(true);
+    this.signErrorMessage.set('Importez un fichier image de signature pour continuer.');
   }
 
   useStoredStamp(): void {
@@ -611,9 +547,12 @@ export class SigningComponent implements OnInit {
     this.activeDocIndex.set(i);
     // Update cached URLs to prevent flickering
     const url = this.rawDocUrl();
+    this.pdfPage.set(1);
+    this.pdfTotalPages.set(1);
     this.cachedDocUrl.set(url);
     this.cachedSafeUrl.set(url ? this.sanitizer.bypassSecurityTrustResourceUrl(url) : null);
     this.cdr.detectChanges();
+    this.loadPdfPageCountIfNeeded();
     setTimeout(() => { this.renderDocxPreviewIfNeeded(); this.renderXlsxIfNeeded(); }, 50);
   }
 
@@ -624,6 +563,69 @@ export class SigningComponent implements OnInit {
 
   activeDocUrl(): SafeResourceUrl | null {
     return this.cachedSafeUrl();
+  }
+
+  pdfViewerUrl(): SafeResourceUrl | null {
+    const raw = this.rawDocUrl();
+    if (!raw) return null;
+    return this.sanitizer.bypassSecurityTrustResourceUrl(`${raw}#page=${this.pdfPage()}&zoom=page-fit&toolbar=0&navpanes=0&statusbar=0&messages=0`);
+  }
+
+  pdfPages(): number[] {
+    return Array.from({ length: this.pdfTotalPages() }, (_v, i) => i + 1);
+  }
+
+  pdfPageUrl(page: number): SafeResourceUrl | null {
+    const raw = this.rawDocUrl();
+    if (!raw) return null;
+    // Add a per-page query token to avoid browser PDF plugin caching all iframes as page 1.
+    return this.sanitizer.bypassSecurityTrustResourceUrl(`${raw}?viewer_page=${page}#page=${page}&zoom=page-fit&toolbar=0&navpanes=0&statusbar=0&messages=0`);
+  }
+
+  setPdfPage(value: string): void {
+    const page = Math.max(1, Math.floor(Number(value) || 1));
+    this.pdfPage.set(page);
+  }
+
+  prevPdfPage(): void {
+    this.pdfPage.update(p => Math.max(1, p - 1));
+  }
+
+  nextPdfPage(): void {
+    this.pdfPage.update(p => p + 1);
+  }
+
+  private async loadPdfPageCountIfNeeded(): Promise<void> {
+    if (!this.isPdf()) return;
+    const url = this.rawDocUrl();
+    if (!url) return;
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error('PDF_FETCH_FAILED');
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      const total = this.countPdfPagesFromBytes(bytes);
+      this.pdfTotalPages.set(Math.max(1, total));
+      this.pdfPage.update(p => Math.min(Math.max(1, p), Math.max(1, total)));
+      this.cdr.detectChanges();
+    } catch {
+      this.pdfTotalPages.set(1);
+      this.pdfPage.set(1);
+    }
+  }
+
+  private countPdfPagesFromBytes(bytes: Uint8Array): number {
+    // Heuristic 1: use page tree '/Count N' values (usually reliable even for compressed PDFs).
+    const text = new TextDecoder('latin1').decode(bytes);
+    const countMatches = [...text.matchAll(/\/Count\s+(\d{1,5})\b/g)];
+    const maxCount = countMatches.reduce((max, m) => {
+      const val = Number(m[1]);
+      return Number.isFinite(val) ? Math.max(max, val) : max;
+    }, 0);
+    if (maxCount > 0) return maxCount;
+
+    // Heuristic 2 fallback: count '/Type /Page' markers.
+    const pageMatches = text.match(/\/Type\s*\/Page(?!s)/g);
+    return pageMatches?.length || 1;
   }
 
   isPdf(): boolean {
@@ -689,43 +691,34 @@ export class SigningComponent implements OnInit {
   // ── Actions ───────────────────────────────────────────────
   sign(): void {
     const role = this.recipient()?.role;
-    const needsSignature = role === 'SIGNATORY' || role === 'APPROVER';
-    if (needsSignature) {
-      const hasDrawn = !this.isCanvasEmpty();
-      const hasUploaded = !!this.uploadedSignaturePreview() || this.useSavedSignature();
-      if ((this.signatureMode() === 'draw' && !hasDrawn) || (this.signatureMode() === 'upload' && !hasUploaded)) {
-        this.sigError.set(true);
-        return;
-      }
+    const needsSignature = role === 'SIGNATORY';
+    if (needsSignature && !this.uploadedSignaturePreview()) {
+      this.sigError.set(true);
+      return;
     }
     this.sigError.set(false);
     this.signErrorMessage.set('');
     this.processing.set(true);
-    const sig = needsSignature
-      ? (this.signatureMode() === 'upload' && !this.useSavedSignature()
-          ? (this.uploadedSignaturePreview() || undefined)
-          : this.signatureMode() === 'draw'
-            ? this.getSignatureBase64()
-            : undefined)
-      : undefined;
+    const sig = needsSignature ? (this.uploadedSignaturePreview() || undefined) : undefined;
     const activeDocId = this.activeDoc()?.id_document;
     const position = (needsSignature && activeDocId)
       ? {
           doc_id: activeDocId,
           x_ratio: this.signatureZone()?.x ?? 0.15,
           y_ratio: this.signatureZone()?.y ?? 0.90,
+          page_number: this.signaturePage(),
         }
       : undefined;
     // Cachet
     const useStamp = this.useStamp();
     const stampImg = this.uploadedStampPreview() || undefined;
     const stampPos = (useStamp && activeDocId)
-      ? { doc_id: activeDocId, x_ratio: this.stampZone().x, y_ratio: this.stampZone().y }
+      ? { doc_id: activeDocId, x_ratio: this.stampZone().x, y_ratio: this.stampZone().y, page_number: this.stampPage() }
       : undefined;
     this.api.signDocument(
       this.token,
       sig,
-      this.useSavedSignature(),
+    false,
       this.sigComment || undefined,
       position,
       useStamp,
@@ -769,10 +762,8 @@ export class SigningComponent implements OnInit {
           return;
         }
         if (status === 400 && (msg.includes('aucune signature sauvegardée') || msg.includes('aucune signature'))) {
-          this.useSavedSignature.set(false);
           this.uploadedSignaturePreview.set(null);
-          this.signatureMode.set('draw');
-          this.signErrorMessage.set('Aucune signature enregistrée dans votre profil. Dessinez votre signature dans la zone ci-dessous ou importez un fichier image.');
+          this.signErrorMessage.set('Aucune signature importée. Choisissez un fichier image pour signer.');
           return;
         }
         if (status === 400 && msg.includes('impossible d\'apposer')) {
@@ -866,12 +857,22 @@ export class SigningComponent implements OnInit {
     this.signatureZone.set({ ...cur, y: Math.min(Math.max(Number(v) / 100, 0), 1) });
   }
 
+  updateSigPage(v: string): void {
+    const page = Math.max(1, Math.floor(Number(v) || 1));
+    this.signaturePage.set(Math.min(page, Math.max(1, this.pdfTotalPages())));
+  }
+
   updateStampX(v: string): void {
     this.stampZone.set({ ...this.stampZone(), x: Math.min(Math.max(Number(v) / 100, 0), 1) });
   }
 
   updateStampY(v: string): void {
     this.stampZone.set({ ...this.stampZone(), y: Math.min(Math.max(Number(v) / 100, 0), 1) });
+  }
+
+  updateStampPage(v: string): void {
+    const page = Math.max(1, Math.floor(Number(v) || 1));
+    this.stampPage.set(Math.min(page, Math.max(1, this.pdfTotalPages())));
   }
 
   // ── Zoom & Pan ────────────────────────────────
@@ -1105,21 +1106,10 @@ export class SigningComponent implements OnInit {
 
   endDraw(): void { this.isDrawing = false; }
 
-  setSignatureMode(mode: 'draw' | 'upload'): void {
+  setSignatureMode(mode: 'upload'): void {
     this.signatureMode.set(mode);
-    // Toujours réinitialiser la signature sauvegardée quand on change de mode
     this.useSavedSignature.set(false);
-    if (mode === 'upload') {
-      // Réinitialiser le preview pour forcer l'upload d'un nouveau fichier
-      this.uploadedSignaturePreview.set(null);
-    }
-    this.sigError.set(false);
-  }
-
-  clearCanvas(): void {
-    const canvas = this.canvasRef?.nativeElement;
-    if (!canvas) return;
-    canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
+    this.uploadedSignaturePreview.set(null);
     this.sigError.set(false);
   }
 
@@ -1168,7 +1158,7 @@ export class SigningComponent implements OnInit {
   }
 
   roleLabel(r: string): string {
-    const m: Record<string, string> = { SIGNATORY: 'Signataire', APPROVER: 'Approbateur', VIEWER: 'Visualisateur', DELEGATOR: 'Délégateur' };
+    const m: Record<string, string> = { SIGNATORY: 'Signataire', APPROVER: 'Vérificateur', VIEWER: 'Visualisateur', DELEGATOR: 'Délégateur' };
     return m[r] || r;
   }
 

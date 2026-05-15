@@ -2,6 +2,7 @@ import { Component, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink, RouterLinkActive } from '@angular/router';
 import { AuthService } from '../../core/services/auth.service';
+import { ApiService } from '../../core/services/api.service';
 
 interface NavItem {
   icon: string;
@@ -28,7 +29,12 @@ interface NavItem {
       <nav class="sidebar-nav">
         <ng-container *ngFor="let item of visibleItems">
           <a [routerLink]="item.route" routerLinkActive="active" class="nav-item">
-            <span class="nav-icon">{{ item.icon }}</span>
+            <span class="nav-icon-wrap">
+              <span class="nav-icon">{{ item.icon }}</span>
+              <span *ngIf="item.route === '/notifications' && api.unreadNotifCount() > 0" class="notif-badge">
+                {{ api.unreadNotifCount() > 99 ? '99+' : api.unreadNotifCount() }}
+              </span>
+            </span>
             <span>{{ item.label }}</span>
           </a>
         </ng-container>
@@ -69,6 +75,15 @@ interface NavItem {
       &:hover { background: rgba(255,255,255,0.1); color: #fff; }
       &.active { background: rgba(255,255,255,0.15); color: #fff; font-weight: 600; }
       .nav-icon { font-size: 18px; width: 22px; text-align: center; flex-shrink: 0; }
+      .nav-icon-wrap { position: relative; width: 22px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+      .notif-badge {
+        position: absolute; top: -6px; right: -8px;
+        background: #ef4444; color: #fff;
+        font-size: 10px; font-weight: 700; line-height: 1;
+        min-width: 16px; height: 16px; border-radius: 8px;
+        display: flex; align-items: center; justify-content: center;
+        padding: 0 3px; border: 1.5px solid var(--primary);
+      }
     }
     .sidebar-footer {
       padding: 16px; border-top: 1px solid rgba(255,255,255,0.1);
@@ -86,14 +101,13 @@ export class SidebarComponent {
     { icon: '📊', label: 'Tableau de bord', route: '/dashboard' },
     { icon: '📨', label: 'Parapheur',        route: '/envelopes' },
     { icon: '📄', label: 'Documents',        route: '/documents' },
-    { icon: '📋', label: 'Modèles',          route: '/templates' },
     { icon: '🔔', label: 'Notifications',    route: '/notifications' },
     { icon: '🔍', label: 'Piste d\'audit',   route: '/audit' },
     { icon: '👥', label: 'Utilisateurs',     route: '/users', roles: ['ADMIN', 'SUPER_ADMIN'] },
     { icon: '👤', label: 'Mon profil',       route: '/profile' },
   ];
 
-  constructor(public auth: AuthService) {}
+  constructor(public auth: AuthService, public api: ApiService) {}
 
   get visibleItems(): NavItem[] {
     return this.items.filter(item =>

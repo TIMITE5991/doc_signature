@@ -28,19 +28,18 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
   zoneDocMap       = signal<Map<number, number>>(new Map());
   zonePageMap      = signal<Map<number, number>>(new Map());
   sigZones         = signal<Map<number, { x_ratio: number; y_ratio: number; doc_id: number; page_number?: number }>>(new Map());
-  // Zoom & Pan controls for preview
-  zoneZoom         = signal(100);
-  zonePanX         = signal(0);
-  zonePanY         = signal(0);
-  zonePanningMode  = signal(false);
+  // PDF canvas rendering
+  zonePdfTotalPages  = signal(1);
+  zonePdfRendering   = signal(false);
   zoneScrollX      = signal(0);
   zoneScrollY      = signal(0);
   zoneContainerW   = signal(0);
   zoneContainerH   = signal(0);
-  zoneAnimateTransform = signal(false);
 
-  private zonePanPending = false;
   private zoneScrollPending = false;
+  private pdfDocumentCache = new Map<number, any>();
+  private pdfRenderSeq     = 0;
+  private zonePdfTaskRef: any = null;
   private zonePreviewUrlCache = new Map<number, SafeResourceUrl>();
   private zonePreviewObjectUrlCache = new Map<number, string>();
   private zoneDocBlobCache = new Map<number, Blob>();
@@ -56,6 +55,7 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
   private currentZonePreviewDocId: number | null = null;
 
   @ViewChild('zoneDocxContainer') zoneDocxContainerRef?: ElementRef<HTMLDivElement>;
+  @ViewChild('pdfCanvas') pdfCanvasRef?: ElementRef<HTMLCanvasElement>;
 
   form = this.fb.group({
     title:        ['', Validators.required],
@@ -92,6 +92,10 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
       URL.revokeObjectURL(url);
     }
     this.zonePreviewObjectUrlCache.clear();
+    for (const pdfDoc of this.pdfDocumentCache.values()) {
+      pdfDoc.destroy?.();
+    }
+    this.pdfDocumentCache.clear();
     this.bumpZonePreviewCacheTick();
   }
 
@@ -148,7 +152,7 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
       .map((_, i) => i)
       .filter(i => {
         const role = this.recipientsArray.at(i).get('role')?.value;
-        return role === 'SIGNATORY' || role === 'APPROVER';
+        return role === 'SIGNATORY';
       });
   }
 
@@ -158,7 +162,9 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
   getZoneY(i: number): number { return (this.sigZones().get(i)?.y_ratio ?? 0) * 100; }
   zonePercentX(i: number): number { return Math.round(this.getZoneX(i)); }
   zonePercentY(i: number): number { return Math.round(this.getZoneY(i)); }
-  getZonePage(i: number): number { return this.sigZones().get(i)?.page_number || 1; }
+  getZonePage(i: number): number {
+    return this.zonePageMap().get(i) || this.sigZones().get(i)?.page_number || 1;
+  }
 
   getRecipientLabel(i: number): string {
     const g  = this.recipientsArray.at(i);
@@ -227,6 +233,16 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
     return this.zonePreviewUrlCache.get(docId) || null;
   }
 
+  getZonePdfPreviewDocUrl(recipientIdx: number): SafeResourceUrl | null {
+    this.zonePreviewCacheTick();
+    if (!this.isZonePdfPreview(recipientIdx)) return null;
+    const objectUrl = this.getZonePreviewObjectUrl(recipientIdx);
+    if (!objectUrl) return null;
+    const page = Math.max(1, this.getZonePage(recipientIdx));
+    const withPage = `${objectUrl}#page=${page}&zoom=page-fit&toolbar=0&navpanes=0&statusbar=0&messages=0`;
+    return this.sanitizer.bypassSecurityTrustResourceUrl(withPage);
+  }
+
   onZonePlacerClick(event: MouseEvent, recipientIdx: number): void {
     const target  = event.currentTarget as HTMLElement;
     const rect    = target.getBoundingClientRect();
@@ -241,8 +257,7 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
   }
 
   onZonePreviewClick(event: MouseEvent, recipientIdx: number): void {
-    if (this.zonePanningMode()) return;
-    if (this.zoneDocxLoading() || this.zoneIframeLoading()) return;
+    if (this.zonePdfRendering() || this.zoneDocxLoading() || this.zoneIframeLoading()) return;
     if (this.zoneDocxError() || this.zoneIframeError()) return;
     this.onZonePlacerClick(event, recipientIdx);
   }
@@ -272,7 +287,16 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
     if (existing) {
       const updatedZ = new Map(this.sigZones());
       updatedZ.set(recipientIdx, { ...existing, page_number: page });
+      this.zoneScrollToTop();
       this.sigZones.set(updatedZ);
+    }
+    // Re-render PDF canvas for the new page
+    if (this.isZonePdfPreview(recipientIdx)) {
+      const docIndex = this.getRecipientDocIndex(recipientIdx);
+      const docId = this.selectedDocs()[docIndex];
+      if (docId && this.zoneDocBlobCache.has(docId)) {
+        setTimeout(() => this.loadAndRenderZonePdf(docId, page), 0);
+      }
     }
   }
 
@@ -382,88 +406,93 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
     });
   }
 
-  // ── Zone Preview Zoom/Pan ──────────────
-  zoneZoomIn(): void { 
-    this.zoneAnimateTransform.set(true);
-    this.zoneZoom.update(z => Math.min(z + 25, 300)); 
-  }
-  zoneZoomOut(): void { 
-    this.zoneAnimateTransform.set(true);
-    this.zoneZoom.update(z => Math.max(z - 25, 50)); 
-  }
-  zoneResetZoom(): void { 
-    this.zoneAnimateTransform.set(true);
-    this.zoneZoom.set(100); 
-    this.zonePanX.set(0); 
-    this.zonePanY.set(0); 
-  }
-  zoneTogglePanMode(): void { this.zonePanningMode.update(v => !v); }
 
-  onZonePreviewWheel(event: WheelEvent): void {
-    if (!event.ctrlKey && !event.metaKey) return;
-    event.preventDefault();
-    this.zoneAnimateTransform.set(true);
-    const delta = event.deltaY > 0 ? -25 : 25;
-    this.zoneZoom.update(z => Math.min(Math.max(z + delta, 50), 300));
-  }
-
-  onZonePreviewPan(event: PointerEvent, viewer: HTMLElement): void {
-    if (!this.zonePanningMode()) return;
-    if (event.button !== 0) return;
-    
-    this.zoneAnimateTransform.set(false);
-    
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const startPanX = this.zonePanX();
-    const startPanY = this.zonePanY();
-
-    const onMove = (e: PointerEvent) => {
-      if (!this.zonePanPending) {
-        this.zonePanPending = true;
-        requestAnimationFrame(() => {
-          const dx = e.clientX - startX;
-          const dy = e.clientY - startY;
-          this.zonePanX.set(startPanX + dx);
-          this.zonePanY.set(startPanY + dy);
-          this.zonePanPending = false;
-        });
-      }
-    };
-    const onEnd = () => {
-      document.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerup', onEnd);
-      this.zonePanPending = false;
-    };
-    document.addEventListener('pointermove', onMove);
-    document.addEventListener('pointerup', onEnd);
-  }
-
-  zoneOverviewPercent(): number {
-    if (this.zoneContainerH() === 0) return 0;
-    return Math.round((this.zoneScrollY() / (this.zoneContainerH() * 2)) * 100);
-  }
-
-  onZoneContainerScroll(event: Event): void {
-    const target = event.target as HTMLElement;
-    if (!this.zoneScrollPending) {
-      this.zoneScrollPending = true;
-      requestAnimationFrame(() => {
-        this.zoneScrollX.set(target.scrollLeft);
-        this.zoneScrollY.set(target.scrollTop);
-        this.zoneContainerW.set(target.clientWidth);
-        this.zoneContainerH.set(target.clientHeight);
-        this.zoneScrollPending = false;
-      });
-    }
-  }
-
-  zoneScrollToPercent(y: number): void {
-    const container = document.querySelector('.zone-preview-iframe-container') as HTMLElement;
+  private zoneScrollToTop(): void {
+    const container = document.querySelector('.zdv-stage') as HTMLElement;
     if (!container) return;
-    const maxY = container.scrollHeight - container.clientHeight;
-    container.scrollTop = (y / 100) * maxY;
+    container.scrollTop = 0;
   }
+
+    async loadAndRenderZonePdf(docId: number, page: number): Promise<void> {
+      const seq = ++this.pdfRenderSeq;
+      this.zonePdfRendering.set(true);
+      this.cdr.detectChanges();
+
+      try {
+        const pdfjs = await import('pdfjs-dist');
+        if (!pdfjs.GlobalWorkerOptions.workerSrc) {
+          pdfjs.GlobalWorkerOptions.workerSrc = 'assets/pdfjs/pdf.worker.min.mjs';
+        }
+
+        let pdfDoc = this.pdfDocumentCache.get(docId);
+        if (!pdfDoc) {
+          const blob = this.zoneDocBlobCache.get(docId);
+          if (!blob) { this.zonePdfRendering.set(false); this.cdr.detectChanges(); return; }
+          const ab = await blob.arrayBuffer();
+          if (seq !== this.pdfRenderSeq) return;
+          pdfDoc = await pdfjs.getDocument({ data: new Uint8Array(ab) }).promise;
+          if (seq !== this.pdfRenderSeq) return;
+          this.pdfDocumentCache.set(docId, pdfDoc);
+          this.zonePdfTotalPages.set(pdfDoc.numPages);
+          this.cdr.detectChanges();
+        } else {
+          this.zonePdfTotalPages.set(pdfDoc.numPages);
+        }
+
+        const clampedPage = Math.min(Math.max(page, 1), pdfDoc.numPages);
+        const pdfPage = await pdfDoc.getPage(clampedPage);
+        if (seq !== this.pdfRenderSeq) return;
+
+        // Wait for canvas to appear in DOM (OnPush needs detectChanges)
+        let canvas: HTMLCanvasElement | null = null;
+        for (let i = 0; i < 15; i++) {
+          if (seq !== this.pdfRenderSeq) return;
+          canvas = this.pdfCanvasRef?.nativeElement ?? null;
+          if (canvas) break;
+          await new Promise(r => setTimeout(r, 50));
+          this.cdr.detectChanges();
+        }
+        if (!canvas || seq !== this.pdfRenderSeq) return;
+
+        const containerWidth = Math.max((canvas.parentElement?.clientWidth || 800) - 32, 300);
+        const viewport  = pdfPage.getViewport({ scale: 1 });
+        const scale     = containerWidth / viewport.width;
+        const scaled    = pdfPage.getViewport({ scale });
+
+        canvas.width  = scaled.width;
+        canvas.height = scaled.height;
+
+        const ctx = canvas.getContext('2d')!;
+        if (this.zonePdfTaskRef) {
+          try { this.zonePdfTaskRef.cancel(); } catch { /* ignore */ }
+        }
+        const task = pdfPage.render({ canvasContext: ctx, viewport: scaled });
+        this.zonePdfTaskRef = task;
+        await task.promise;
+        if (seq !== this.pdfRenderSeq) return;
+
+        this.zonePdfRendering.set(false);
+        this.cdr.detectChanges();
+      } catch (err: any) {
+        if (seq !== this.pdfRenderSeq) return;
+        if (err?.name === 'RenderingCancelledException') return;
+        this.zonePdfRendering.set(false);
+        this.zoneIframeError.set('Impossible de rendre ce PDF.');
+        this.cdr.detectChanges();
+      }
+    }
+
+    zonePdfPrevPage(): void {
+      const current = this.getZonePage(this.zoneRecipientIdx());
+      if (current <= 1) return;
+      this.setZonePageForRecipient(this.zoneRecipientIdx(), String(current - 1));
+    }
+
+    zonePdfNextPage(): void {
+      const current = this.getZonePage(this.zoneRecipientIdx());
+      if (current >= this.zonePdfTotalPages()) return;
+      this.setZonePageForRecipient(this.zoneRecipientIdx(), String(current + 1));
+    }
 
   private isZoneDocxPreviewByDoc(doc: Document | null): boolean {
     if (!doc) return false;
@@ -514,10 +543,8 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
 
     if (this.currentZonePreviewDocId !== doc.id_document) {
       this.currentZonePreviewDocId = doc.id_document;
-      this.zoneZoom.set(100);
-      this.zonePanX.set(0);
-      this.zonePanY.set(0);
-      this.zoneAnimateTransform.set(false);
+      this.zonePdfTotalPages.set(1);
+      this.zonePdfRendering.set(false);
     }
 
     if (this.isZoneDocxPreviewByDoc(doc)) {
@@ -535,10 +562,20 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
       this.zoneDocxError.set('');
       this.lastZoneDocxDocId = null;
       if (this.zoneDocxContainerRef?.nativeElement) this.zoneDocxContainerRef.nativeElement.innerHTML = '';
-      if (this.lastZoneIframeDocId === doc.id_document && this.zonePreviewUrlCache.has(doc.id_document)) {
-        this.zoneIframeLoading.set(false);
-        this.zoneIframeError.set('');
-        return;
+      const isPdfNow = this.isZonePdfPreview(this.zoneRecipientIdx());
+      if (this.lastZoneIframeDocId === doc.id_document) {
+        const alreadyCached = isPdfNow
+          ? this.pdfDocumentCache.has(doc.id_document) || this.zoneDocBlobCache.has(doc.id_document)
+          : this.zonePreviewUrlCache.has(doc.id_document);
+        if (alreadyCached) {
+          this.zoneIframeLoading.set(false);
+          this.zoneIframeError.set('');
+          if (isPdfNow) {
+            const page = this.getZonePage(this.zoneRecipientIdx());
+            this.loadAndRenderZonePdf(doc.id_document, page);
+          }
+          return;
+        }
       }
       this.lastZoneIframeDocId = doc.id_document;
       this.renderZoneIframe(doc.id_document);
@@ -590,20 +627,27 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
 
   private renderZoneIframe(docId: number): void {
     const seq = ++this.zoneIframeRenderSeq;
-    this.zoneIframeLoading.set(true);
-    this.zoneIframeError.set('');
+    const isPdf = this.isZonePdfPreview(this.zoneRecipientIdx());
 
-    const existingSafe = this.zonePreviewUrlCache.get(docId);
-    if (existingSafe) {
-      this.zoneIframeLoading.set(false);
+    // For images: reuse URL cache
+    if (!isPdf && this.zonePreviewUrlCache.has(docId)) {
       return;
     }
+
+    this.zoneIframeLoading.set(true);
+    this.zoneIframeError.set('');
 
     const cachedBlob = this.zoneDocBlobCache.get(docId);
     if (cachedBlob) {
       if (seq !== this.zoneIframeRenderSeq) return;
-      this.setZoneIframeUrlFromBlob(docId, cachedBlob);
-      this.zoneIframeLoading.set(false);
+      if (isPdf) {
+        this.zoneIframeLoading.set(false);
+        const page = this.getZonePage(this.zoneRecipientIdx());
+        this.loadAndRenderZonePdf(docId, page);
+      } else {
+        this.setZoneIframeUrlFromBlob(docId, cachedBlob);
+        this.zoneIframeLoading.set(false);
+      }
       return;
     }
 
@@ -611,13 +655,20 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
       next: (blob) => {
         if (seq !== this.zoneIframeRenderSeq) return;
         this.zoneDocBlobCache.set(docId, blob);
-        this.setZoneIframeUrlFromBlob(docId, blob);
-        this.zoneIframeLoading.set(false);
+        if (isPdf) {
+          this.zoneIframeLoading.set(false);
+          const page = this.getZonePage(this.zoneRecipientIdx());
+          this.loadAndRenderZonePdf(docId, page);
+        } else {
+          this.setZoneIframeUrlFromBlob(docId, blob);
+          this.zoneIframeLoading.set(false);
+        }
       },
       error: () => {
         if (seq !== this.zoneIframeRenderSeq) return;
         this.zoneIframeLoading.set(false);
         this.zoneIframeError.set('Impossible de charger ce document.');
+        this.cdr.detectChanges();
       },
     });
   }

@@ -6,7 +6,7 @@ import { DomSanitizer, SafeResourceUrl, SafeHtml } from '@angular/platform-brows
 import { ApiService } from '../../core/services/api.service';
 import { Envelope, Recipient } from '../../core/models';
 
-type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'return' | 'forward' | 'done' | 'error';
+type Step = 'loading' | 'already-signed' | 'sign' | 'approve' | 'reject' | 'delegate' | 'return' | 'forward' | 'done' | 'error';
 
 @Component({
   selector: 'app-signing',
@@ -52,6 +52,7 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
       <div class="signing-card success-card" *ngIf="step() === 'done'">
         <div class="icon-big">🎉</div>
         <h2 *ngIf="doneMessage() === 'signed'">Document signé avec succès !</h2>
+        <h2 *ngIf="doneMessage() === 'approved'">Document vérifié avec succès !</h2>
         <h2 *ngIf="doneMessage() === 'rejected'">Document rejeté</h2>
         <h2 *ngIf="doneMessage() === 'delegated'">Signature déléguée</h2>
         <h2 *ngIf="doneMessage() === 'returned'">Retour pour corrections envoyé</h2>
@@ -79,14 +80,29 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
 
             <!-- PDF viewer intégré -->
             <div *ngIf="isPdf()" class="doc-wrapper pdf-wrapper" (pointerdown)="onDocumentPan($event, $any($event.currentTarget).parentElement)" (scroll)="onViewerContainerScroll($event)">
-              <div class="pdf-pages-strip" *ngIf="cachedSafeUrl()">
-                <div class="pdf-page-card" *ngFor="let p of pdfPages()">
-                  <div class="pdf-page-head">Page {{ p }} / {{ pdfTotalPages() }}</div>
+              <div class="pdf-reference-viewer" *ngIf="cachedSafeUrl()">
+                <div class="pdf-toolbar">
+                  <button type="button" class="btn btn-outline btn-sm" (click)="prevPdfPage()" [disabled]="pdfPage() <= 1">◀</button>
+                  <span>Page {{ pdfPage() }} / {{ pdfTotalPages() }}</span>
+                  <button type="button" class="btn btn-outline btn-sm" (click)="nextPdfPage()" [disabled]="pdfPage() >= pdfTotalPages()">▶</button>
+                  <input type="number" min="1" [max]="pdfTotalPages()" [value]="pdfPage()" (input)="setPdfPage($any($event.target).value)">
+                </div>
+                <div class="pdf-main-page">
                   <iframe
-                    [src]="pdfPageUrl(p)"
+                    [src]="pdfPageUrl(pdfPage())"
                     class="doc-iframe"
-                    [title]="'Page ' + p">
+                    [title]="'Page ' + pdfPage()">
                   </iframe>
+                </div>
+                <div class="pdf-thumbs" *ngIf="pdfTotalPages() > 1">
+                  <button
+                    type="button"
+                    class="pdf-thumb"
+                    *ngFor="let p of pdfPages()"
+                    [class.active]="pdfPage() === p"
+                    (click)="setPdfPage(String(p))">
+                    {{ p }}
+                  </button>
                 </div>
               </div>
               <div *ngIf="!cachedSafeUrl()" class="no-doc">PDF indisponible</div>
@@ -141,8 +157,8 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
               <div class="no-doc">📂 Aucun document</div>
             </div>
 
-            <!-- Zone overlay -->
-            <div class="zone-overlay" *ngIf="cachedSafeUrl() && (isPdf() || isImage() || isDocx())"
+            <!-- Zone overlay (signatory only) -->
+            <div class="zone-overlay" *ngIf="cachedSafeUrl() && (isPdf() || isImage() || isDocx()) && recipient()!.role === 'SIGNATORY'"
               [class.interactive]="!panningMode()"
               (click)="onViewerZoneClick($event)"
               (pointermove)="onOverlayPointerMove($event)"
@@ -206,9 +222,39 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
             <p class="hint-text" style="margin-bottom:4px;" *ngIf="!hasPredefZone()">📍 Cliquez sur le document (gauche) pour repositionner la zone de signature.</p>
             <p class="hint-text" style="margin-bottom:4px;background:#e8fff5;border:1px solid #a8e6c9;border-radius:6px;padding:6px 10px;" *ngIf="hasPredefZone()">📌 L'emplacement de votre signature a été fixé par l'émetteur du document.</p>
 
-            <div class="position-controls" *ngIf="!hasPredefZone()">
+            <div class="placement-mode" *ngIf="!hasPredefZone()">
+              <label class="mode-option">
+                <input type="radio" name="placementMode" [checked]="placementMode() === 'smart'" (change)="setPlacementMode('smart')">
+                <span>✨ Position automatique (recommandee)</span>
+              </label>
+              <label class="mode-option">
+                <input type="radio" name="placementMode" [checked]="placementMode() === 'manual'" (change)="setPlacementMode('manual')">
+                <span>🎯 Position manuelle</span>
+              </label>
+              <button type="button" class="btn btn-outline btn-sm" (click)="applySmartSignaturePlacement()" *ngIf="placementMode() === 'smart'">
+                Appliquer le placement automatique
+              </button>
+            </div>
+
+            <div class="position-controls" *ngIf="!hasPredefZone() && placementMode() === 'manual'">
               <label>Page signature: {{ signaturePage() }}</label>
               <input type="number" min="1" [value]="signaturePage()" (input)="updateSigPage($any($event.target).value)">
+              <div class="position-xy">
+                <label>X: {{ sigXPercent() }}%</label>
+                <input type="range" min="0" max="100" [value]="sigXPercent()" (input)="updateSigX($any($event.target).value)">
+                <label>Y: {{ sigYPercent() }}%</label>
+                <input type="range" min="0" max="100" [value]="sigYPercent()" (input)="updateSigY($any($event.target).value)">
+              </div>
+              <div class="position-step-row">
+                <button type="button" class="btn btn-outline btn-sm" (click)="centerSignature()">🎯 Centrer</button>
+                <button type="button" class="btn btn-outline btn-sm" (click)="goToSignatureZone()">👁 Aller à la zone</button>
+              </div>
+              <div class="position-corners-row">
+                <button type="button" class="btn btn-outline btn-sm" (click)="setSignatureCorner('top-left')">↖ Haut gauche</button>
+                <button type="button" class="btn btn-outline btn-sm" (click)="setSignatureCorner('top-right')">↗ Haut droite</button>
+                <button type="button" class="btn btn-outline btn-sm" (click)="setSignatureCorner('bottom-left')">↙ Bas gauche</button>
+                <button type="button" class="btn btn-outline btn-sm" (click)="setSignatureCorner('bottom-right')">↘ Bas droite</button>
+              </div>
               <p class="hint-text" style="margin:8px 0 0 0">Positionnez la signature directement sur le document avec un clic ou en glissant le marqueur ✍.</p>
             </div>
 
@@ -280,10 +326,14 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
 
           <!-- Actions -->
           <div class="signing-actions">
-            <button class="btn btn-success btn-lg" (click)="sign()" [disabled]="processing()">
-              {{ recipient()!.role === 'APPROVER'
-                  ? (processing() ? 'Traitement...' : '✅ Valider la vérification')
-                  : (processing() ? 'Traitement...' : '✍️ Confirmer la signature') }}
+            <button class="btn btn-success btn-lg" (click)="recipient()!.role === 'APPROVER' ? step.set('approve') : sign()" [disabled]="processing()">
+              {{ processing()
+                  ? 'Traitement...'
+                  : (recipient()!.role === 'APPROVER'
+                      ? '✍️ Traiter'
+                      : (recipient()!.role === 'VIEWER'
+                          ? '📤 Soumettre et envoyer'
+                          : '✍️ Confirmer la signature')) }}
             </button>
             <button class="btn btn-return" (click)="step.set('return')" [disabled]="processing()">
               ↩️ Retour pour corrections
@@ -296,6 +346,30 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'reject' | 'delegate' | 'ret
               🔀 Déléguer
             </button>
           </div>
+        </div>
+      </div>
+
+      <!-- Approver review form -->
+      <div class="signing-card" *ngIf="step() === 'approve'">
+        <div class="icon-big">✅</div>
+        <h2>Donner votre avis</h2>
+        <p>Validez le document tel quel ou demandez des modifications avec un commentaire.</p>
+        <div class="form-group mt-2">
+          <label>Votre commentaire <span class="optional">(facultatif)</span></label>
+          <textarea [(ngModel)]="sigComment" [ngModelOptions]="{standalone: true}"
+            rows="5"
+            placeholder="Ex : merci de corriger la page 3 avant validation finale."></textarea>
+        </div>
+        <div class="d-flex gap-1 mt-2" style="flex-wrap:wrap">
+          <button type="button" class="btn btn-outline" (click)="step.set('sign')" [disabled]="processing()">
+            ← Retour
+          </button>
+          <button type="button" class="btn btn-primary" (click)="approveDocument()" [disabled]="processing()">
+            {{ processing() ? 'Envoi...' : '✅ Valider' }}
+          </button>
+          <button type="button" class="btn btn-outline" (click)="step.set('return')" [disabled]="processing()">
+            ✏️ Demander des modifications
+          </button>
         </div>
       </div>
 
@@ -428,6 +502,7 @@ export class SigningComponent implements OnInit {
   cachedSafeUrl = signal<SafeResourceUrl | null>(null);
   signatureZone = signal<{ x: number; y: number } | null>(null);
   signaturePage = signal(1);
+  placementMode = signal<'smart' | 'manual'>('smart');
   pdfPage       = signal(1);
   pdfTotalPages = signal(1);
   xlsxHtml    = signal<SafeHtml | null>(null);
@@ -515,6 +590,7 @@ export class SigningComponent implements OnInit {
           this.cachedSafeUrl.set(url ? this.sanitizer.bypassSecurityTrustResourceUrl(url) : null);
           this.cdr.detectChanges();
           this.loadPdfPageCountIfNeeded();
+          if (!this.hasPredefZone()) this.applySmartSignaturePlacement();
           setTimeout(() => { this.renderDocxPreviewIfNeeded(); this.renderXlsxIfNeeded(); }, 50);
         }
       },
@@ -584,7 +660,8 @@ export class SigningComponent implements OnInit {
 
   setPdfPage(value: string): void {
     const page = Math.max(1, Math.floor(Number(value) || 1));
-    this.pdfPage.set(page);
+    const clamped = Math.min(page, Math.max(1, this.pdfTotalPages()));
+    this.pdfPage.set(clamped);
   }
 
   prevPdfPage(): void {
@@ -592,7 +669,7 @@ export class SigningComponent implements OnInit {
   }
 
   nextPdfPage(): void {
-    this.pdfPage.update(p => p + 1);
+    this.pdfPage.update(p => Math.min(this.pdfTotalPages(), p + 1));
   }
 
   private async loadPdfPageCountIfNeeded(): Promise<void> {
@@ -606,6 +683,10 @@ export class SigningComponent implements OnInit {
       const total = this.countPdfPagesFromBytes(bytes);
       this.pdfTotalPages.set(Math.max(1, total));
       this.pdfPage.update(p => Math.min(Math.max(1, p), Math.max(1, total)));
+      if (!this.hasPredefZone() && this.placementMode() === 'smart') {
+        this.signaturePage.set(Math.max(1, total));
+        this.pdfPage.set(Math.max(1, total));
+      }
       this.cdr.detectChanges();
     } catch {
       this.pdfTotalPages.set(1);
@@ -616,16 +697,26 @@ export class SigningComponent implements OnInit {
   private countPdfPagesFromBytes(bytes: Uint8Array): number {
     // Heuristic 1: use page tree '/Count N' values (usually reliable even for compressed PDFs).
     const text = new TextDecoder('latin1').decode(bytes);
+    
+    // Try to find the Pages object count
+    const pageTreeMatches = text.match(/\/Pages\s*<<[^>]*\/Count\s+(\d{1,5})/);
+    if (pageTreeMatches && pageTreeMatches[1]) {
+      const count = Number(pageTreeMatches[1]);
+      if (count > 0) return count;
+    }
+    
+    // Heuristic 2: count all /Count occurrences and take the max (more reliable for nested trees)
     const countMatches = [...text.matchAll(/\/Count\s+(\d{1,5})\b/g)];
     const maxCount = countMatches.reduce((max, m) => {
       const val = Number(m[1]);
-      return Number.isFinite(val) ? Math.max(max, val) : max;
+      return Number.isFinite(val) && val > 0 ? Math.max(max, val) : max;
     }, 0);
     if (maxCount > 0) return maxCount;
 
-    // Heuristic 2 fallback: count '/Type /Page' markers.
+    // Heuristic 3 fallback: count '/Type /Page' markers (not /Pages).
     const pageMatches = text.match(/\/Type\s*\/Page(?!s)/g);
-    return pageMatches?.length || 1;
+    const pageCount = pageMatches?.length || 1;
+    return Math.max(1, pageCount);
   }
 
   isPdf(): boolean {
@@ -718,7 +809,7 @@ export class SigningComponent implements OnInit {
     this.api.signDocument(
       this.token,
       sig,
-    false,
+      false,
       this.sigComment || undefined,
       position,
       useStamp,
@@ -792,6 +883,56 @@ export class SigningComponent implements OnInit {
     });
   }
 
+  approveDocument(): void {
+    if (this.recipient()?.role !== 'APPROVER') return;
+    this.signErrorMessage.set('');
+    this.processing.set(true);
+    this.api.signDocument(
+      this.token,
+      undefined,
+      false,
+      this.sigComment || undefined,
+    ).subscribe({
+      next: () => {
+        this.api.getPublicEnvelope(this.token).subscribe({
+          next: (env) => {
+            this.envelope.set(env);
+            this.activeDocIndex.set(0);
+            this.xlsxHtml.set(null);
+            this.processing.set(false);
+            this.doneMessage.set('approved');
+            this.step.set('done');
+            this.cdr.detectChanges();
+          },
+          error: () => {
+            this.processing.set(false);
+            this.doneMessage.set('approved');
+            this.step.set('done');
+          },
+        });
+      },
+      error: (err: any) => {
+        this.processing.set(false);
+        const status = Number(err?.status || 0);
+        const backendMessage =
+          typeof err?.error === 'string'
+            ? err.error
+            : Array.isArray(err?.error?.message)
+              ? err.error.message.join(' ')
+              : String(err?.error?.message || err?.message || '');
+        if (status === 401 || status === 404 || status === 410) {
+          this.errorTitle.set('Lien invalide ou expiré');
+          this.errorDetail.set('Ce lien de signature n\'est plus valide. Veuillez contacter l\'émetteur du document.');
+          this.step.set('error');
+          return;
+        }
+        this.signErrorMessage.set(
+          backendMessage || 'La vérification a échoué. Réessayez.',
+        );
+      },
+    });
+  }
+
   goBackToViewer(): void {
     this.xlsxHtml.set(null);
     this.step.set('sign');
@@ -800,6 +941,7 @@ export class SigningComponent implements OnInit {
   }
 
   onViewerZoneClick(event: MouseEvent): void {
+    if (this.placementMode() !== 'manual' && this.zoneTarget() === 'signature') return;
     if (this.draggingTarget()) return;
     const target = event.currentTarget as HTMLElement;
     const rect = target.getBoundingClientRect();
@@ -807,9 +949,11 @@ export class SigningComponent implements OnInit {
     const y = Math.min(Math.max((event.clientY - rect.top) / rect.height, 0), 1);
     if (this.zoneTarget() === 'stamp') {
       this.stampZone.set({ x, y });
+      this.stampPage.set(this.pdfPage());
       this.zoneTarget.set('signature'); // Retour au mode signature après placement
     } else {
       this.signatureZone.set({ x, y });
+      this.signaturePage.set(this.pdfPage());
     }
   }
 
@@ -821,6 +965,7 @@ export class SigningComponent implements OnInit {
   }
 
   startDragMarker(kind: 'signature' | 'stamp', event: PointerEvent): void {
+    if (kind === 'signature' && this.placementMode() !== 'manual') return;
     event.preventDefault();
     event.stopPropagation();
     this.draggingTarget.set(kind);
@@ -859,7 +1004,44 @@ export class SigningComponent implements OnInit {
 
   updateSigPage(v: string): void {
     const page = Math.max(1, Math.floor(Number(v) || 1));
-    this.signaturePage.set(Math.min(page, Math.max(1, this.pdfTotalPages())));
+    const clamped = Math.min(page, Math.max(1, this.pdfTotalPages()));
+    this.signaturePage.set(clamped);
+    this.pdfPage.set(clamped);
+  }
+
+  setPlacementMode(mode: 'smart' | 'manual'): void {
+    this.placementMode.set(mode);
+    if (mode === 'smart') this.applySmartSignaturePlacement();
+  }
+
+  applySmartSignaturePlacement(): void {
+    // Common e-sign pattern: place signature in a safe area on the last page.
+    const total = Math.max(1, this.pdfTotalPages());
+    this.signaturePage.set(total);
+    this.pdfPage.set(total);
+    this.signatureZone.set({ x: 0.78, y: 0.86 });
+    this.goToSignatureZone();
+  }
+
+  nudgeSignature(dx: number, dy: number): void {
+    const cur = this.signatureZone() ?? { x: 0.15, y: 0.90 };
+    this.signatureZone.set({
+      x: Math.min(1, Math.max(0, cur.x + dx)),
+      y: Math.min(1, Math.max(0, cur.y + dy)),
+    });
+  }
+
+  centerSignature(): void {
+    this.signatureZone.set({ x: 0.5, y: 0.5 });
+  }
+
+  setSignatureCorner(corner: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'): void {
+    const margin = 0.08;
+    if (corner === 'top-left') this.signatureZone.set({ x: margin, y: margin });
+    if (corner === 'top-right') this.signatureZone.set({ x: 1 - margin, y: margin });
+    if (corner === 'bottom-left') this.signatureZone.set({ x: margin, y: 1 - margin });
+    if (corner === 'bottom-right') this.signatureZone.set({ x: 1 - margin, y: 1 - margin });
+    this.goToSignatureZone();
   }
 
   updateStampX(v: string): void {

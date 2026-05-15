@@ -32,7 +32,7 @@ import { Notification } from '../../core/models';
           <p class="notif-msg">{{ n.message }}</p>
           <span class="notif-date">{{ n.created_at | date:'dd/MM/yyyy HH:mm' }}</span>
           <a *ngIf="n.id_envelope" [routerLink]="['/envelopes', n.id_envelope]"
-             class="notif-link" (click)="$event.stopPropagation()">
+             class="notif-link" (click)="markRead(n); $event.stopPropagation()">
             Voir l'enveloppe →
           </a>
         </div>

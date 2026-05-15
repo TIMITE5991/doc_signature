@@ -171,11 +171,6 @@
           </select>
         </div>
 
-        <div class="form-group mt-2" style="margin-bottom:0">
-          <label style="font-size:11px">Page cible (PDF multi-pages)</label>
-          <input type="number" min="1" [value]="getZonePage(zoneRecipientIdx())" (input)="setZonePageForRecipient(zoneRecipientIdx(), $any($event.target).value)">
-        </div>
-
         <div class="form-group mt-2" style="margin-bottom:0" *ngIf="hasZone(zoneRecipientIdx())">
           <label style="font-size:11px">Position X précise: {{ zonePercentX(zoneRecipientIdx()) }}%</label>
           <input type="range" min="0" max="100" [value]="zonePercentX(zoneRecipientIdx())" (input)="updateZoneXForRecipient(zoneRecipientIdx(), $any($event.target).value)">
@@ -184,130 +179,119 @@
         </div>
       </div>
 
-      <!-- Colonne droite : aperçu du document avec overlay -->
+      <!-- Colonne droite : viewer du document -->
       <div class="zone-preview-col">
-        <div class="zone-preview-wrap" *ngIf="isZonePreviewSupported(zoneRecipientIdx()); else zonePreviewUnsupported">
-          <!-- Preview Header with Controls -->
-          <div class="zone-preview-header">
-            <button type="button" class="zone-ctrl-btn" [title]="zonePanningMode() ? 'Mode sélection' : 'Mode panoramique'" (click)="zoneTogglePanMode()" [class.active]="zonePanningMode()">
-              {{ zonePanningMode() ? '✏️' : '✋' }}
-            </button>
-            <button type="button" class="zone-ctrl-btn" (click)="zoneZoomOut()" [disabled]="zoneZoom() <= 50" title="Dézoomer">🔍−</button>
-            <span style="font-size:11px;font-weight:600;min-width:40px;text-align:center">{{ zoneZoom() }}%</span>
-            <button type="button" class="zone-ctrl-btn" (click)="zoneZoomIn()" [disabled]="zoneZoom() >= 300" title="Zoomer">🔍+</button>
-            <button type="button" class="zone-ctrl-btn" (click)="zoneResetZoom()" title="Réinitialiser">↺</button>
+        <div class="zone-doc-viewer" *ngIf="isZonePreviewSupported(zoneRecipientIdx()); else zonePreviewUnsupported">
+
+          <!-- Barre d'outils du viewer -->
+          <div class="zdv-toolbar">
+            <div class="zdv-doc-info">
+              <span class="zdv-doc-icon">📄</span>
+              <span class="zdv-doc-name" [title]="getZonePreviewDoc(zoneRecipientIdx())?.original_name || ''">
+                {{ getZonePreviewDoc(zoneRecipientIdx())?.original_name || 'Document' }}
+              </span>
+            </div>
+            <div class="zdv-nav" *ngIf="isZonePdfPreview(zoneRecipientIdx())">
+              <button type="button" class="zdv-nav-btn" (click)="zonePdfPrevPage()" [disabled]="getZonePage(zoneRecipientIdx()) <= 1">‹</button>
+              <span class="zdv-page-info">Page <strong>{{ getZonePage(zoneRecipientIdx()) }}</strong> / {{ zonePdfTotalPages() }}</span>
+              <button type="button" class="zdv-nav-btn" (click)="zonePdfNextPage()" [disabled]="getZonePage(zoneRecipientIdx()) >= zonePdfTotalPages()">›</button>
+            </div>
+            <div class="zdv-toolbar-tip">
+              📍 Cliquez sur le document pour placer la zone
+            </div>
           </div>
 
-          <!-- Navigation Slider -->
-          <div class="zone-nav-bar">
-            <label style="font-size:11px;font-weight:600;white-space:nowrap">Parcourir:</label>
-            <input type="range" class="zone-nav-slider" min="0" max="100" [value]="zoneOverviewPercent()" 
-              (input)="zoneScrollToPercent($any($event.target).value)" />
-            <span style="font-size:11px;font-weight:600;min-width:35px;text-align:right;color:#0a7c4e">{{ zoneOverviewPercent() }}%</span>
-          </div>
+          <!-- Zone de rendu -->
+          <div class="zdv-stage">
 
-          <!-- Preview Container with Zoom/Pan -->
-          <div class="zone-preview-iframe-container"
-            (wheel)="onZonePreviewWheel($event)"
-            (scroll)="onZoneContainerScroll($event)"
-            (pointerdown)="onZonePreviewPan($event, $any($event.currentTarget))">
-            <div class="zone-preview-content"
-              (click)="onZonePreviewClick($event, zoneRecipientIdx())"
-              [class.placement-mode]="!zonePanningMode() && !zoneDocxLoading() && !zoneIframeLoading() && !zoneDocxError() && !zoneIframeError()"
-              [class.animate-transform]="zoneAnimateTransform()"
-              [style.transform]="'scale(' + (zoneZoom() / 100) + ') translate(' + zonePanX() + 'px, ' + zonePanY() + 'px)'">
+            <!-- Chargement -->
+            <div class="zdv-loading-overlay"
+                 *ngIf="(zoneDocxLoading() || zoneIframeLoading() || zonePdfRendering()) && !zoneDocxError() && !zoneIframeError()">
+              <div class="spinner"></div>
+              <span>Chargement...</span>
+            </div>
 
-              <ng-container *ngIf="isZoneDocxPreview(zoneRecipientIdx()); else zoneIframePreview">
-                <div class="zone-docx-preview">
-                  <div class="loading-center" *ngIf="zoneDocxLoading()">
-                    <div class="spinner" style="width:24px;height:24px;border-width:2px"></div>
-                  </div>
-                  <div class="error-msg" *ngIf="zoneDocxError()">{{ zoneDocxError() }}</div>
-                  <div #zoneDocxContainer class="zone-docx-container" [style.display]="zoneDocxError() ? 'none' : 'block'"></div>
+            <!-- Erreur -->
+            <div class="zdv-error-overlay" *ngIf="zoneDocxError() || zoneIframeError()">
+              ⚠ {{ zoneDocxError() || zoneIframeError() }}
+            </div>
+
+            <!-- DOCX -->
+            <div class="zdv-sheet"
+                 *ngIf="isZoneDocxPreview(zoneRecipientIdx()) && !zoneDocxError()"
+                 (click)="onZonePreviewClick($event, zoneRecipientIdx())"
+                 [class.zdv-sheet--ready]="!zoneDocxLoading()">
+              <div #zoneDocxContainer class="zdv-docx-inner" [style.display]="zoneDocxLoading() ? 'none' : 'block'"></div>
+              <div class="zdv-overlay" *ngIf="!zoneDocxLoading()">
+                <div *ngIf="hasZone(zoneRecipientIdx())" class="zdv-marker zdv-marker--active"
+                     [style.left.%]="getZoneX(zoneRecipientIdx())" [style.top.%]="getZoneY(zoneRecipientIdx())">
+                  <span class="zdv-marker-label">✍ {{ getRecipientLabel(zoneRecipientIdx()) }}</span>
                 </div>
-              </ng-container>
-
-              <ng-template #zoneIframePreview>
-                <div class="loading-center" *ngIf="zoneIframeLoading()">
-                  <div class="spinner" style="width:24px;height:24px;border-width:2px"></div>
-                </div>
-                <div class="error-msg" *ngIf="zoneIframeError()">{{ zoneIframeError() }}</div>
-
-                <ng-container *ngIf="!zoneIframeLoading() && !zoneIframeError()">
-                  <iframe *ngIf="isZonePdfPreview(zoneRecipientIdx()) && getZonePreviewDocUrl(zoneRecipientIdx()) as docUrl"
-                          [src]="docUrl"
-                          class="zone-preview-pdf"
-                          title="Aperçu PDF"></iframe>
-
-                  <img *ngIf="isZoneImagePreview(zoneRecipientIdx()) && getZonePreviewObjectUrl(zoneRecipientIdx()) as blobUrl"
-                       [src]="blobUrl"
-                       alt="Aperçu image"
-                       class="zone-preview-image" />
-
-                  <iframe *ngIf="!isZonePdfPreview(zoneRecipientIdx()) && !isZoneImagePreview(zoneRecipientIdx()) && getZonePreviewDocUrl(zoneRecipientIdx()) as docUrl"
-                          [src]="docUrl"
-                          class="zone-preview-iframe"
-                          title="Aperçu document"></iframe>
-
-                  <div class="zone-preview-unavailable-content" *ngIf="!isZoneDocxPreview(zoneRecipientIdx()) && !getZonePreviewObjectUrl(zoneRecipientIdx()) && !getZonePreviewDocUrl(zoneRecipientIdx())">
-                    <h4>Aperçu en préparation...</h4>
-                    <p>Le document est en cours de chargement. Si rien n'apparaît, cliquez ci-dessous.</p>
-                    <a *ngIf="getZonePreviewDoc(zoneRecipientIdx()) as zoneDoc"
-                       class="btn btn-outline btn-sm"
-                       [href]="api.getDocumentViewUrl(zoneDoc.id_document)"
-                       target="_blank"
-                       rel="noopener">
-                      Ouvrir le document
-                    </a>
-                  </div>
-                </ng-container>
-              </ng-template>
-
-              <!-- Overlay cliquable -->
-              <div
-                class="zone-placer-overlay"
-                *ngIf="!zonePanningMode() && !zoneDocxLoading() && !zoneIframeLoading() && !zoneDocxError() && !zoneIframeError()">
-                <div class="zone-placer-hint">
-                  📍 Cliquez pour placer la zone de <strong>{{ getRecipientLabel(zoneRecipientIdx()) }}</strong>
-                </div>
-
-                <!-- Marqueur zone active -->
-                <div *ngIf="hasZone(zoneRecipientIdx())"
-                     class="zone-placed-marker"
-                     [style.left.%]="getZoneX(zoneRecipientIdx())"
-                     [style.top.%]="getZoneY(zoneRecipientIdx())">
-                  <span class="zone-placed-label">✍ {{ getRecipientLabel(zoneRecipientIdx()) }}</span>
-                </div>
-
-                <!-- Marqueurs autres signataires (gris) -->
                 <ng-container *ngFor="let i of signatoryIndices()">
-                  <div *ngIf="hasZone(i) && i !== zoneRecipientIdx()"
-                       class="zone-placed-marker zone-placed-marker-other"
-                       [style.left.%]="getZoneX(i)"
-                       [style.top.%]="getZoneY(i)">
-                    <span class="zone-placed-label">{{ getRecipientLabel(i) }}</span>
+                  <div *ngIf="hasZone(i) && i !== zoneRecipientIdx()" class="zdv-marker zdv-marker--other"
+                       [style.left.%]="getZoneX(i)" [style.top.%]="getZoneY(i)">
+                    <span class="zdv-marker-label">{{ getRecipientLabel(i) }}</span>
                   </div>
                 </ng-container>
               </div>
             </div>
-          </div>
-        </div>
+
+            <!-- PDF Canvas -->
+            <div class="zdv-sheet zdv-sheet--pdf"
+                 *ngIf="isZonePdfPreview(zoneRecipientIdx()) && !zoneIframeError()"
+                 (click)="onZonePreviewClick($event, zoneRecipientIdx())">
+              <canvas #pdfCanvas class="zdv-pdf-canvas"></canvas>
+              <div class="zdv-overlay" *ngIf="!zoneIframeLoading() && !zonePdfRendering()">
+                <div *ngIf="hasZone(zoneRecipientIdx())" class="zdv-marker zdv-marker--active"
+                     [style.left.%]="getZoneX(zoneRecipientIdx())" [style.top.%]="getZoneY(zoneRecipientIdx())">
+                  <span class="zdv-marker-label">✍ {{ getRecipientLabel(zoneRecipientIdx()) }}</span>
+                </div>
+                <ng-container *ngFor="let i of signatoryIndices()">
+                  <div *ngIf="hasZone(i) && i !== zoneRecipientIdx()" class="zdv-marker zdv-marker--other"
+                       [style.left.%]="getZoneX(i)" [style.top.%]="getZoneY(i)">
+                    <span class="zdv-marker-label">{{ getRecipientLabel(i) }}</span>
+                  </div>
+                </ng-container>
+              </div>
+            </div>
+
+            <!-- Image -->
+            <div class="zdv-sheet zdv-sheet--img"
+                 *ngIf="isZoneImagePreview(zoneRecipientIdx()) && !isZonePdfPreview(zoneRecipientIdx()) && !zoneIframeError()"
+                 (click)="onZonePreviewClick($event, zoneRecipientIdx())">
+              <img *ngIf="getZonePreviewObjectUrl(zoneRecipientIdx()) as blobUrl"
+                   [src]="blobUrl" alt="Aperçu" class="zdv-img" />
+              <div class="zdv-overlay" *ngIf="!zoneIframeLoading()">
+                <div *ngIf="hasZone(zoneRecipientIdx())" class="zdv-marker zdv-marker--active"
+                     [style.left.%]="getZoneX(zoneRecipientIdx())" [style.top.%]="getZoneY(zoneRecipientIdx())">
+                  <span class="zdv-marker-label">✍ {{ getRecipientLabel(zoneRecipientIdx()) }}</span>
+                </div>
+                <ng-container *ngFor="let i of signatoryIndices()">
+                  <div *ngIf="hasZone(i) && i !== zoneRecipientIdx()" class="zdv-marker zdv-marker--other"
+                       [style.left.%]="getZoneX(i)" [style.top.%]="getZoneY(i)">
+                    <span class="zdv-marker-label">{{ getRecipientLabel(i) }}</span>
+                  </div>
+                </ng-container>
+              </div>
+            </div>
+
+          </div><!-- /zdv-stage -->
+        </div><!-- /zone-doc-viewer -->
 
         <ng-template #zonePreviewUnsupported>
-          <div class="zone-preview-wrap zone-preview-unavailable">
-            <div class="zone-preview-unavailable-content" *ngIf="getZonePreviewDoc(zoneRecipientIdx()) as zoneDoc">
-              <h4>Aperçu indisponible pour ce format</h4>
-              <p>
-                Le document <strong>{{ zoneDoc.original_name }}</strong> ne peut pas être prévisualisé ici.
+          <div class="zone-doc-viewer zone-doc-viewer--unavailable">
+            <div *ngIf="getZonePreviewDoc(zoneRecipientIdx()) as zoneDoc" style="text-align:center;padding:32px 24px">
+              <h4 style="margin:0 0 10px;color:var(--primary)">Aperçu indisponible</h4>
+              <p style="color:var(--text-secondary);font-size:13px;margin:0 0 16px">
+                <strong>{{ zoneDoc.original_name }}</strong> — format non pris en charge.<br>Formats supportés : PDF, PNG, JPG, DOCX.
               </p>
-              <p>Formats pris en charge pour l'aperçu de zone : PDF, images (PNG/JPG) et DOCX.</p>
               <a class="btn btn-outline btn-sm" [href]="api.getDocumentViewUrl(zoneDoc.id_document)" target="_blank" rel="noopener">
                 Ouvrir le document
               </a>
             </div>
           </div>
         </ng-template>
-      </div>
+      </div><!-- /zone-preview-col -->
     </div>
   </div>
 

@@ -421,6 +421,7 @@ export class EnvelopeDetailComponent implements OnInit {
     const m: Record<string, string> = {
       ENVELOPE_CREATED: '📝 Enveloppe créée', ENVELOPE_SENT: '✉️ Enveloppe envoyée',
       DOCUMENT_SIGNED: '✍️ Document signé', DOCUMENT_REJECTED: '❌ Document rejeté',
+      DOCUMENT_VIEWED: '📤 Document soumis et envoyé',
       DOCUMENT_RETURNED: '↩️ Retour pour corrections', DOCUMENT_FORWARDED: '🔁 Document renvoyé à un destinataire',
       ENVELOPE_COMPLETED: '✅ Processus terminé',
       ENVELOPE_CLOSED_BY_CREATOR: '✅ Circuit clôturé par le créateur',

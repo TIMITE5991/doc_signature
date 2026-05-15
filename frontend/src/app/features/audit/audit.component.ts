@@ -101,6 +101,7 @@ export class AuditComponent implements OnInit {
       ENVELOPE_CREATED:   '📝 Enveloppe créée',
       ENVELOPE_SENT:      '✉️ Enveloppe envoyée',
       DOCUMENT_SIGNED:    '✍️ Document signé',
+      DOCUMENT_VIEWED:    '📤 Document soumis et envoyé',
       DOCUMENT_REJECTED:  '❌ Document rejeté',
       ENVELOPE_COMPLETED: '✅ Processus terminé',
       ENVELOPE_CANCELLED: '🚫 Annulation',

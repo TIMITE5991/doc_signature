@@ -209,13 +209,14 @@ export class EnvelopesService {
   ) {
     const [recipient] = await this.db('t_recipients').where('token', token);
     if (!recipient) throw new NotFoundException('Lien de signature invalide');
-    if (recipient.status === RecipientStatus.SIGNED) {
-      throw new BadRequestException('Ce document a déjà été signé');
+    if ([RecipientStatus.SIGNED, RecipientStatus.APPROVED, RecipientStatus.VIEWED].includes(recipient.status)) {
+      throw new BadRequestException('Ce document a déjà été traité');
     }
 
     const isSignatory = recipient.role === 'SIGNATORY';
     const isApprover = recipient.role === 'APPROVER';
-    if (!isSignatory && !isApprover) {
+    const isViewer = recipient.role === 'VIEWER';
+    if (!isSignatory && !isApprover && !isViewer) {
       throw new BadRequestException('Ce rôle ne peut pas traiter ce document dans cette étape');
     }
 
@@ -348,14 +349,22 @@ export class EnvelopesService {
     }
 
     await this.db('t_recipients').where('id_recipient', recipient.id_recipient).update({
-      status: isApprover ? RecipientStatus.APPROVED : RecipientStatus.SIGNED,
+      status: isApprover
+        ? RecipientStatus.APPROVED
+        : (isViewer ? RecipientStatus.VIEWED : RecipientStatus.SIGNED),
       signed_at: this.db.fn.now(),
       signing_comment: comment || null,
     });
 
-    await this.logAudit(envelope.id_envelope, isApprover ? 'DOCUMENT_APPROVED' : 'DOCUMENT_SIGNED', recipient.id_user, ipAddress, {
+    await this.logAudit(
+      envelope.id_envelope,
+      isApprover ? 'DOCUMENT_APPROVED' : (isViewer ? 'DOCUMENT_VIEWED' : 'DOCUMENT_SIGNED'),
+      recipient.id_user,
+      ipAddress,
+      {
       recipient_email: recipient.email,
-    });
+      },
+    );
 
     // Notify sender
     const [sender] = await this.db('t_users').where('id_user', envelope.created_by);
@@ -372,14 +381,20 @@ export class EnvelopesService {
       envelope.created_by,
       isApprover
         ? `${recipient.first_name} ${recipient.last_name} a vérifié/validé le document : "${envelope.title}"`
-        : `${recipient.first_name} ${recipient.last_name} a signé le document : "${envelope.title}"`,
+        : (isViewer
+            ? `${recipient.first_name} ${recipient.last_name} a consulté et transmis le document : "${envelope.title}"`
+            : `${recipient.first_name} ${recipient.last_name} a signé le document : "${envelope.title}"`),
       envelope.id_envelope,
     );
 
     // Check if all signed → complete or trigger next in sequence
     await this.checkAndAdvanceCircuit(envelope.id_envelope, sender);
 
-    return { message: isApprover ? 'Document vérifié avec succès' : 'Document signé avec succès' };
+    return {
+      message: isApprover
+        ? 'Document vérifié avec succès'
+        : (isViewer ? 'Document soumis et envoyé avec succès' : 'Document signé avec succès'),
+    };
   }
 
   private async applySignatureOnEnvelopeDocument(
@@ -424,9 +439,13 @@ export class EnvelopesService {
       const sigWidth = pageWidth * 0.22;
       const ratio = sigImage.height / sigImage.width;
       const sigHeight = sigWidth * ratio;
+      // X position: centered at xRatio
       const x = Math.min(Math.max((xRatio * pageWidth) - (sigWidth / 2), 0), pageWidth - sigWidth);
-      const yTopBased = (yRatio * pageHeight) - (sigHeight / 2);
-      const y = Math.min(Math.max(pageHeight - yTopBased - sigHeight, 0), pageHeight - sigHeight);
+      // Y position: convert from front-end coords (0=top, 1=bottom) to PDF coords (0=bottom, 1=top)
+      // yRatio from frontend: 0=top, 1=bottom
+      // Convert to PDF: yFromBottom = (1 - yRatio) * pageHeight, then center
+      const yFromBottom = ((1 - yRatio) * pageHeight);
+      const y = Math.min(Math.max(yFromBottom - (sigHeight / 2), 0), pageHeight - sigHeight);
 
       page.drawImage(sigImage, { x, y, width: sigWidth, height: sigHeight, opacity: 0.95 });
 
@@ -446,9 +465,11 @@ export class EnvelopesService {
         const stampWidth = stampPageWidth * 0.20;
         const stampRatio = stampImg.height / stampImg.width;
         const stampHeight = stampWidth * stampRatio;
+        // X position: centered at sx
         const stX = Math.min(Math.max((sx * stampPageWidth) - (stampWidth / 2), 0), stampPageWidth - stampWidth);
-        const stTopBased = (sy * stampPageHeight) - (stampHeight / 2);
-        const stY = Math.min(Math.max(stampPageHeight - stTopBased - stampHeight, 0), stampPageHeight - stampHeight);
+        // Y position: convert from front-end coords (0=top, 1=bottom) to PDF coords (0=bottom, 1=top)
+        const stFromBottom = ((1 - sy) * stampPageHeight);
+        const stY = Math.min(Math.max(stFromBottom - (stampHeight / 2), 0), stampPageHeight - stampHeight);
         stampPage.drawImage(stampImg, { x: stX, y: stY, width: stampWidth, height: stampHeight, opacity: 0.88 });
       }
 
@@ -983,11 +1004,15 @@ export class EnvelopesService {
   private async checkAndAdvanceCircuit(envelopeId: number, sender: any) {
     const allRecipients = await this.db('t_recipients')
       .where('id_envelope', envelopeId)
-      .whereIn('role', ['SIGNATORY', 'APPROVER']);
+      .whereIn('role', ['SIGNATORY', 'APPROVER', 'VIEWER']);
 
     const [env] = await this.db('t_envelopes').where('id_envelope', envelopeId);
     const allDone = allRecipients.every(
-      (r) => r.status === RecipientStatus.SIGNED || r.status === RecipientStatus.APPROVED || r.status === RecipientStatus.DELEGATED,
+      (r) =>
+        r.status === RecipientStatus.SIGNED
+        || r.status === RecipientStatus.APPROVED
+        || r.status === RecipientStatus.VIEWED
+        || r.status === RecipientStatus.DELEGATED,
     );
 
     if (allDone) {
@@ -1008,7 +1033,12 @@ export class EnvelopesService {
       // Find next pending
       const maxSigned = Math.max(
         ...allRecipients
-          .filter((r) => r.status === RecipientStatus.SIGNED || r.status === RecipientStatus.APPROVED || r.status === RecipientStatus.DELEGATED)
+          .filter((r) =>
+            r.status === RecipientStatus.SIGNED
+            || r.status === RecipientStatus.APPROVED
+            || r.status === RecipientStatus.VIEWED
+            || r.status === RecipientStatus.DELEGATED,
+          )
           .map((r) => r.signing_order),
         0,
       );

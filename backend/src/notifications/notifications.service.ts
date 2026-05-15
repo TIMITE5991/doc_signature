@@ -27,6 +27,11 @@ export class NotificationsService {
     return Number(count);
   }
 
+  async deleteAll(userId: number) {
+    await this.db('t_notifications').where('id_user', userId).delete();
+    return { message: 'Toutes les notifications ont été supprimées' };
+  }
+
   async create(userId: number, message: string, envelopeId?: number): Promise<void> {
     await this.db('t_notifications').insert({
       id_user: userId,

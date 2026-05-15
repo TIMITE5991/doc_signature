@@ -1,4 +1,4 @@
-import { Controller, Get, Put, Param, UseGuards, Request, ParseIntPipe } from '@nestjs/common';
+import { Controller, Get, Put, Delete, Param, UseGuards, Request, ParseIntPipe } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service';
 import { JwtGuard } from '../auth/jwt.guard';
@@ -32,5 +32,11 @@ export class NotificationsController {
   @ApiOperation({ summary: 'Marquer toutes les notifications comme lues' })
   markAllRead(@Request() req) {
     return this.notificationsService.markAllRead(req.user.id_user);
+  }
+
+  @Delete()
+  @ApiOperation({ summary: 'Supprimer toutes les notifications' })
+  deleteAll(@Request() req) {
+    return this.notificationsService.deleteAll(req.user.id_user);
   }
 }

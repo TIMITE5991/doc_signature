@@ -243,4 +243,10 @@ export class ApiService {
       tap(() => this.unreadNotifCount.set(0)),
     );
   }
+
+  deleteAllNotifications(): Observable<any> {
+    return this.http.delete(`${this.base}/notifications`).pipe(
+      tap(() => this.unreadNotifCount.set(0)),
+    );
+  }
 }

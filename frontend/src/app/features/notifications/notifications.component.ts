@@ -15,9 +15,14 @@ import { Notification } from '../../core/models';
         <h1>Notifications</h1>
         <p>{{ api.unreadNotifCount() }} non lues</p>
       </div>
-      <button class="btn btn-outline" (click)="markAllRead()" [disabled]="api.unreadNotifCount() === 0">
-        Tout marquer comme lu
-      </button>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-outline" (click)="markAllRead()" [disabled]="notifications().length === 0">
+          Tout marquer comme lu
+        </button>
+        <button class="btn btn-danger" (click)="deleteAll()" [disabled]="notifications().length === 0">
+          🗑️ Vider
+        </button>
+      </div>
     </div>
 
     <div class="loading-center" *ngIf="loading()"><div class="spinner"></div></div>
@@ -104,5 +109,14 @@ export class NotificationsComponent implements OnInit {
     this.api.markAllNotificationsRead().subscribe(() => {
       this.notifications.update(list => list.map(n => ({ ...n, is_read: true })));
     });
+  }
+
+  deleteAll(): void {
+    if (confirm('Êtes-vous sûr de vouloir supprimer toutes les notifications ?')) {
+      this.api.deleteAllNotifications().subscribe(() => {
+        this.notifications.set([]);
+        this.api.unreadNotifCount.set(0);
+      });
+    }
   }
 }

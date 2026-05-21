@@ -159,7 +159,7 @@ CORS_ORIGIN=http://localhost:4200
 
 # Upload
 UPLOAD_DEST=./uploads
-MAX_FILE_SIZE=10485760
+MAX_FILE_SIZE=52428800
 ```
 
 ---
@@ -215,7 +215,7 @@ Ils sont envoyés par e-mail et ne nécessitent **pas** d'être connecté.
 - **Délégation** : un signataire peut déléguer sa signature à une autre personne (`@cgrae.ci`).
 - **Piste d'audit** : chaque action (création, envoi, signature, rejet, annulation) est horodatée et tracée.
 - **Notifications** : les utilisateurs reçoivent des notifications in-app pour chaque événement les concernant.
-- **Gestion documentaire** : téléversement de PDF, DOCX, XLSX, images (max 10 MB).
+- **Gestion documentaire** : téléversement de PDF, DOCX, XLSX, images (max 50 MB).
 - **Modèles** : créez des gabarits réutilisables pour vos circuits de signature.
 
 ---

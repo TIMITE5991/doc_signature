@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { RouterLink, ActivatedRoute, Router } from '@angular/router';
 import { ApiService } from '../../../core/services/api.service';
 import { AuthService } from '../../../core/services/auth.service';
-import { Envelope, AuditLog, Recipient } from '../../../core/models';
+import { Envelope, AuditLog, Recipient, PreviousEnvelopeDocument } from '../../../core/models';
 
 @Component({
   selector: 'app-envelope-detail',
@@ -79,6 +79,11 @@ import { Envelope, AuditLog, Recipient } from '../../../core/models';
               <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
                 <div>
                   📄 <strong>{{ displayName(doc.original_name) }}</strong>
+                  <span
+                    *ngIf="previousDocumentRevisions().length"
+                    style="margin-left:6px;font-size:11px;font-weight:600;color:#065f46;background:#d1fae5;border:1px solid #a7f3d0;border-radius:999px;padding:2px 8px">
+                    Version corrigée
+                  </span>
                   <span style="color:var(--text-muted);font-size:12px"> – {{ formatSize(doc.size) }}</span>
                 </div>
                 <a [href]="getDocViewUrl(doc.id_document)" target="_blank" rel="noopener"
@@ -89,6 +94,52 @@ import { Envelope, AuditLog, Recipient } from '../../../core/models';
             </div>
             <div class="empty-state" style="padding:16px" *ngIf="!envelope()!.documents?.length">
               Aucun document
+            </div>
+          </div>
+
+          <div class="card mt-2">
+            <h3 class="section-title">Pièces jointes</h3>
+            <div *ngFor="let doc of envelope()!.attachments" class="doc-item">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+                <div>
+                  📎 <strong>{{ displayName(doc.original_name) }}</strong>
+                  <span style="color:var(--text-muted);font-size:12px"> – {{ formatSize(doc.size) }}</span>
+                </div>
+                <a [href]="getDocViewUrl(doc.id_document)" target="_blank" rel="noopener"
+                   class="btn btn-outline btn-sm" style="white-space:nowrap;flex-shrink:0">
+                  👁 Ouvrir
+                </a>
+              </div>
+            </div>
+            <div class="empty-state" style="padding:16px" *ngIf="!envelope()!.attachments?.length">
+              Aucune pièce jointe
+            </div>
+          </div>
+
+          <div class="card mt-2" *ngIf="previousDocumentRevisions().length">
+            <h3 class="section-title">Versions précédentes (comparaison)</h3>
+            <p style="font-size:12px;color:var(--text-muted);margin-bottom:10px">
+              Conservez l'historique des fichiers retournés pour comparer l'ancienne version avec la version corrigée actuelle.
+            </p>
+            <div *ngFor="let rev of previousDocumentRevisions()" style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:10px">
+              <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">
+                Révision {{ rev.revision_no }} · remplacée le {{ rev.replaced_at | date:'dd/MM/yyyy HH:mm' }}
+              </div>
+              <div *ngFor="let doc of rev.docs" class="doc-item" style="padding:8px 0">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+                  <div>
+                    📄 <strong>{{ displayName(doc.original_name) }}</strong>
+                    <span style="margin-left:6px;font-size:11px;font-weight:600;color:#7c2d12;background:#ffedd5;border:1px solid #fed7aa;border-radius:999px;padding:2px 8px">
+                      Ancienne version
+                    </span>
+                    <span style="color:var(--text-muted);font-size:12px"> – {{ formatSize(doc.size) }}</span>
+                  </div>
+                  <a [href]="getDocViewUrl(doc.id_document)" target="_blank" rel="noopener"
+                     class="btn btn-outline btn-sm" style="white-space:nowrap;flex-shrink:0">
+                    👁 Voir ancienne version
+                  </a>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -298,7 +349,7 @@ export class EnvelopeDetailComponent implements OnInit {
       this.api.uploadDocument(this.correctionFiles()[index]).subscribe({
         next: (doc) => uploadNext(index + 1, [...uploadedIds, doc.id_document]),
         error: (err) => {
-          this.error.set(err.message);
+          this.error.set(this.extractUploadErrorMessage(err));
           this.correctionLoading.set(false);
         },
       });
@@ -331,7 +382,16 @@ export class EnvelopeDetailComponent implements OnInit {
 
   canCloseCircuit(): boolean {
     const s = this.envelope()?.status;
-    return this.canSend() && (s === 'IN_PROGRESS' || s === 'REVISION' || s === 'SENT');
+    const recipients = this.envelope()?.recipients ?? [];
+    const circuitFinished = recipients.length > 0 && recipients.every((recipient) =>
+      recipient.status === 'SIGNED'
+      || recipient.status === 'APPROVED'
+      || recipient.status === 'VIEWED'
+      || recipient.status === 'DELEGATED',
+    );
+    return this.canSend()
+      && circuitFinished
+      && (s === 'IN_PROGRESS' || s === 'REVISION' || s === 'SENT');
   }
 
   resetForwardForm(): void {
@@ -379,6 +439,20 @@ export class EnvelopeDetailComponent implements OnInit {
       },
       error: (err) => this.error.set(err.message),
     });
+  }
+
+  private extractUploadErrorMessage(err: any): string {
+    const status = Number(err?.status || 0);
+    const rawMessage = Array.isArray(err?.error?.message)
+      ? err.error.message.join(' ')
+      : (err?.error?.message || err?.message || '');
+    const normalizedMessage = String(rawMessage).toLowerCase();
+
+    if (status === 413 || normalizedMessage.includes('payload too large') || normalizedMessage.includes('file too large')) {
+      return 'Fichier trop volumineux. Taille maximale autorisée : 50 Mo.';
+    }
+
+    return rawMessage || 'Erreur lors du téléchargement du document corrigé.';
   }
 
   canCancel(): boolean {
@@ -449,5 +523,28 @@ export class EnvelopeDetailComponent implements OnInit {
     } catch {
       return name;
     }
+  }
+
+  previousDocumentRevisions(): Array<{ revision_no: number; replaced_at: string; docs: PreviousEnvelopeDocument[] }> {
+    const docs = this.envelope()?.previous_documents ?? [];
+    const byRevision = new Map<number, { revision_no: number; replaced_at: string; docs: PreviousEnvelopeDocument[] }>();
+
+    for (const doc of docs) {
+      const revisionNo = Number(doc.revision_no || 0);
+      if (!byRevision.has(revisionNo)) {
+        byRevision.set(revisionNo, {
+          revision_no: revisionNo,
+          replaced_at: doc.replaced_at,
+          docs: [],
+        });
+      }
+      const revision = byRevision.get(revisionNo)!;
+      revision.docs.push(doc);
+      if (new Date(doc.replaced_at).getTime() > new Date(revision.replaced_at).getTime()) {
+        revision.replaced_at = doc.replaced_at;
+      }
+    }
+
+    return Array.from(byRevision.values()).sort((a, b) => b.revision_no - a.revision_no);
   }
 }

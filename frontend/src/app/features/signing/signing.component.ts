@@ -4,7 +4,7 @@ import { FormsModule, ReactiveFormsModule, FormBuilder, Validators } from '@angu
 import { ActivatedRoute } from '@angular/router';
 import { DomSanitizer, SafeResourceUrl, SafeHtml } from '@angular/platform-browser';
 import { ApiService } from '../../core/services/api.service';
-import { Envelope, Recipient } from '../../core/models';
+import { Envelope, Recipient, PreviousEnvelopeDocument } from '../../core/models';
 
 type Step = 'loading' | 'already-signed' | 'sign' | 'approve' | 'reject' | 'delegate' | 'return' | 'forward' | 'done' | 'error';
 
@@ -157,36 +157,6 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'approve' | 'reject' | 'dele
               <div class="no-doc">📂 Aucun document</div>
             </div>
 
-            <!-- Zone overlay (signatory only) -->
-            <div class="zone-overlay" *ngIf="cachedSafeUrl() && (isPdf() || isImage() || isDocx()) && recipient()!.role === 'SIGNATORY'"
-              [class.interactive]="!panningMode()"
-              (click)="onViewerZoneClick($event)"
-              (pointermove)="onOverlayPointerMove($event)"
-              (pointerup)="onOverlayPointerUp()"
-              (pointerleave)="onOverlayPointerUp()">
-            <!-- Badge zone prédéfinie -->
-            <div *ngIf="hasPredefZone()" class="zone-predef-badge">
-              📌 Zone fixée par l'émetteur
-            </div>
-            <!-- Hint reposition (masqué si zone prédéfinie) -->
-            <div class="zone-hint-label" *ngIf="!hasPredefZone()">
-              {{ zoneTarget() === 'stamp' ? '🏷 Cliquez pour placer le cachet' : '📍 Cliquez pour positionner votre signature' }}
-            </div>
-            <!-- Marqueur signature -->
-            <div class="zone-marker sig-zone-marker"
-              [style.left.%]="(signatureZone()?.x ?? 0.15) * 100"
-              [style.top.%]="(signatureZone()?.y ?? 0.90) * 100"
-              (pointerdown)="startDragMarker('signature', $event)">
-              <span class="zone-marker-label">✍ Signature</span>
-            </div>
-            <!-- Marqueur cachet (si activé) -->
-            <div class="zone-marker stamp-zone-marker" *ngIf="useStamp()"
-              [style.left.%]="stampZone().x * 100"
-              [style.top.%]="stampZone().y * 100"
-              (pointerdown)="startDragMarker('stamp', $event)">
-              <span class="zone-marker-label">🏷 Cachet</span>
-            </div>
-            </div>
           </div>
         </div>
 
@@ -200,6 +170,69 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'approve' | 'reject' | 'dele
             <div class="recipient-badge">
               👤 <strong>{{ recipient()!.first_name }} {{ recipient()!.last_name }}</strong>
               &nbsp;·&nbsp; {{ roleLabel(recipient()!.role) }}
+            </div>
+          </div>
+
+          <div class="comment-section" *ngIf="envelope()!.documents?.length">
+            <label class="field-label">
+              {{ (envelope()!.documents?.length || 0) > 1 ? '📄 Documents à signer' : '📄 Version actuelle' }}
+              <span
+                *ngIf="(envelope()!.documents?.length || 0) > 1"
+                style="margin-left:6px;font-size:11px;font-weight:600;color:#1d4ed8;background:#dbeafe;border:1px solid #bfdbfe;border-radius:999px;padding:2px 8px">
+                {{ envelope()!.documents!.length }} documents
+              </span>
+              <span
+                *ngIf="previousDocumentRevisions().length"
+                style="margin-left:6px;font-size:11px;font-weight:600;color:#065f46;background:#d1fae5;border:1px solid #a7f3d0;border-radius:999px;padding:2px 8px">
+                Version corrigée
+              </span>
+            </label>
+            <p class="hint-text" *ngIf="(envelope()!.documents?.length || 0) > 1" style="margin-top:6px">
+              Sélectionnez un document ci-dessous pour l'afficher dans la visionneuse.
+            </p>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">
+              <button
+                *ngFor="let doc of envelope()!.documents; let i = index"
+                type="button"
+                class="btn btn-outline btn-sm"
+                [class.btn-primary]="activeDocIndex() === i"
+                (click)="selectDoc(i)">
+                {{ i + 1 }}. {{ doc.original_name }}
+              </button>
+            </div>
+          </div>
+
+          <div class="comment-section" *ngIf="envelope()!.attachments?.length">
+            <label class="field-label">📎 Pièces jointes</label>
+            <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">
+              <a *ngFor="let doc of envelope()!.attachments"
+                 [href]="getDocUrl(doc.id_document)"
+                 target="_blank"
+                 rel="noopener"
+                 class="btn btn-outline btn-sm"
+                 style="justify-content:flex-start">
+                📎 {{ doc.original_name }}
+              </a>
+            </div>
+          </div>
+
+          <div class="comment-section" *ngIf="previousDocumentRevisions().length">
+            <label class="field-label">🕘 Anciennes versions (comparaison)</label>
+            <p class="hint-text" style="margin-top:6px">Ouvrez l'ancienne version puis la version actuelle pour comparer les changements.</p>
+            <div *ngFor="let rev of previousDocumentRevisions()" style="margin-top:8px;border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px">
+              <div style="font-size:12px;color:#64748b;margin-bottom:6px">
+                Révision {{ rev.revision_no }} · {{ rev.replaced_at | date:'dd/MM/yyyy HH:mm' }}
+              </div>
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <a *ngFor="let doc of rev.docs"
+                   [href]="getDocUrl(doc.id_document)"
+                   target="_blank"
+                   rel="noopener"
+                   class="btn btn-outline btn-sm"
+                   style="justify-content:flex-start">
+                  👁 {{ doc.original_name }} (ancienne version)
+                </a>
+              </div>
             </div>
           </div>
 
@@ -218,44 +251,6 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'approve' | 'reject' | 'dele
             <div class="sig-header">
               <span class="field-label">✍️ Votre signature</span>
               <button type="button" class="btn btn-outline btn-sm" *ngIf="uploadedSignaturePreview()" (click)="clearUploadedSignature()">🗑 Retirer</button>
-            </div>
-            <p class="hint-text" style="margin-bottom:4px;" *ngIf="!hasPredefZone()">📍 Cliquez sur le document (gauche) pour repositionner la zone de signature.</p>
-            <p class="hint-text" style="margin-bottom:4px;background:#e8fff5;border:1px solid #a8e6c9;border-radius:6px;padding:6px 10px;" *ngIf="hasPredefZone()">📌 L'emplacement de votre signature a été fixé par l'émetteur du document.</p>
-
-            <div class="placement-mode" *ngIf="!hasPredefZone()">
-              <label class="mode-option">
-                <input type="radio" name="placementMode" [checked]="placementMode() === 'smart'" (change)="setPlacementMode('smart')">
-                <span>✨ Position automatique (recommandee)</span>
-              </label>
-              <label class="mode-option">
-                <input type="radio" name="placementMode" [checked]="placementMode() === 'manual'" (change)="setPlacementMode('manual')">
-                <span>🎯 Position manuelle</span>
-              </label>
-              <button type="button" class="btn btn-outline btn-sm" (click)="applySmartSignaturePlacement()" *ngIf="placementMode() === 'smart'">
-                Appliquer le placement automatique
-              </button>
-            </div>
-
-            <div class="position-controls" *ngIf="!hasPredefZone() && placementMode() === 'manual'">
-              <label>Page signature: {{ signaturePage() }}</label>
-              <input type="number" min="1" [value]="signaturePage()" (input)="updateSigPage($any($event.target).value)">
-              <div class="position-xy">
-                <label>X: {{ sigXPercent() }}%</label>
-                <input type="range" min="0" max="100" [value]="sigXPercent()" (input)="updateSigX($any($event.target).value)">
-                <label>Y: {{ sigYPercent() }}%</label>
-                <input type="range" min="0" max="100" [value]="sigYPercent()" (input)="updateSigY($any($event.target).value)">
-              </div>
-              <div class="position-step-row">
-                <button type="button" class="btn btn-outline btn-sm" (click)="centerSignature()">🎯 Centrer</button>
-                <button type="button" class="btn btn-outline btn-sm" (click)="goToSignatureZone()">👁 Aller à la zone</button>
-              </div>
-              <div class="position-corners-row">
-                <button type="button" class="btn btn-outline btn-sm" (click)="setSignatureCorner('top-left')">↖ Haut gauche</button>
-                <button type="button" class="btn btn-outline btn-sm" (click)="setSignatureCorner('top-right')">↗ Haut droite</button>
-                <button type="button" class="btn btn-outline btn-sm" (click)="setSignatureCorner('bottom-left')">↙ Bas gauche</button>
-                <button type="button" class="btn btn-outline btn-sm" (click)="setSignatureCorner('bottom-right')">↘ Bas droite</button>
-              </div>
-              <p class="hint-text" style="margin:8px 0 0 0">Positionnez la signature directement sur le document avec un clic ou en glissant le marqueur ✍.</p>
             </div>
 
           <!-- Section cachet -->
@@ -294,17 +289,6 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'approve' | 'reject' | 'dele
               </div>
 
               <!-- Bouton repositionner cachet -->
-              <button type="button" class="btn btn-outline btn-sm stamp-reposition"
-                [class.active]="zoneTarget() === 'stamp'"
-                (click)="activateStampZonePicker()">
-                {{ zoneTarget() === 'stamp' ? '🏷 Cliquez sur le document...' : '📍 Repositionner le cachet' }}
-              </button>
-
-              <div class="position-controls" *ngIf="useStamp()">
-                <label>Page cachet: {{ stampPage() }}</label>
-                <input type="number" min="1" [value]="stampPage()" (input)="updateStampPage($any($event.target).value)">
-                <p class="hint-text" style="margin:8px 0 0 0">Positionnez le cachet directement sur le document avec un clic ou en glissant le marqueur 🏷.</p>
-              </div>
             </div>
           </div>
             <div class="sig-upload-box">
@@ -340,10 +324,6 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'approve' | 'reject' | 'dele
             </button>
             <button class="btn btn-outline" (click)="step.set('reject')" [disabled]="processing()" *ngIf="recipient()!.role !== 'APPROVER'">
               ❌ Rejeter le document
-            </button>
-            <button class="btn btn-outline" (click)="step.set('delegate')" [disabled]="processing()"
-              *ngIf="recipient()!.role === 'DELEGATOR' || recipient()!.role === 'SIGNATORY'">
-              🔀 Déléguer
             </button>
           </div>
         </div>
@@ -416,29 +396,26 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'approve' | 'reject' | 'dele
       <div class="signing-card" *ngIf="step() === 'delegate'">
         <div class="icon-big">🔀</div>
         <h2>Déléguer la signature</h2>
-        <p>Saisissez les coordonnées du délégué :</p>
+        <p>Saisissez uniquement l'email du délégué :</p>
         <form [formGroup]="delegateForm" (ngSubmit)="delegate()">
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-            <div class="form-group mt-2">
-              <label>Prénom *</label>
-              <input type="text" formControlName="delegate_first_name" />
-            </div>
-            <div class="form-group mt-2">
-              <label>Nom *</label>
-              <input type="text" formControlName="delegate_last_name" />
-            </div>
-          </div>
           <div class="form-group">
             <label>Email &#64;cgrae.ci *</label>
             <input type="email" formControlName="delegate_email" placeholder="delegue&#64;cgrae.ci" />
             <span class="error-msg" *ngIf="delegateForm.get('delegate_email')?.touched && delegateForm.get('delegate_email')?.errors">
               Email &#64;cgrae.ci requis
             </span>
+            <p class="hint-text" *ngIf="delegateForm.get('delegate_email')?.value && !delegateForm.get('delegate_email')?.errors" style="margin-top:6px">
+              Le lien sera envoyé à : <strong>{{ delegateForm.get('delegate_email')?.value }}</strong>
+            </p>
           </div>
           <div class="d-flex gap-1 mt-2">
             <button type="button" class="btn btn-outline" (click)="step.set('sign')">Retour</button>
             <button type="submit" class="btn btn-primary" [disabled]="delegateForm.invalid || processing()">
-              Déléguer
+              {{ processing()
+                ? 'Envoi...'
+                : (delegateForm.get('delegate_email')?.value
+                    ? ('Déléguer à ' + delegateForm.get('delegate_email')?.value)
+                    : 'Déléguer') }}
             </button>
           </div>
         </form>
@@ -542,8 +519,6 @@ export class SigningComponent implements OnInit {
   rejectForm = this.fb.group({ reason: ['', Validators.required] });
   returnForm = this.fb.group({ reason: ['', Validators.required] });
   delegateForm = this.fb.group({
-    delegate_first_name: ['', Validators.required],
-    delegate_last_name:  ['', Validators.required],
     delegate_email:      ['', [Validators.required, Validators.pattern(/^[^@]+@cgrae\.ci$/)]],
   });
   forwardForm = this.fb.group({
@@ -591,6 +566,8 @@ export class SigningComponent implements OnInit {
           this.cdr.detectChanges();
           this.loadPdfPageCountIfNeeded();
           if (!this.hasPredefZone()) this.applySmartSignaturePlacement();
+          this.stampZone.set(this.signatureZone() || { x: 0.78, y: 0.86 });
+          this.stampPage.set(this.signaturePage());
           setTimeout(() => { this.renderDocxPreviewIfNeeded(); this.renderXlsxIfNeeded(); }, 50);
         }
       },
@@ -804,7 +781,12 @@ export class SigningComponent implements OnInit {
     const useStamp = this.useStamp();
     const stampImg = this.uploadedStampPreview() || undefined;
     const stampPos = (useStamp && activeDocId)
-      ? { doc_id: activeDocId, x_ratio: this.stampZone().x, y_ratio: this.stampZone().y, page_number: this.stampPage() }
+      ? {
+          doc_id: activeDocId,
+          x_ratio: position?.x_ratio ?? (this.signatureZone()?.x ?? 0.78),
+          y_ratio: position?.y_ratio ?? (this.signatureZone()?.y ?? 0.86),
+          page_number: position?.page_number ?? this.signaturePage(),
+        }
       : undefined;
     this.api.signDocument(
       this.token,
@@ -941,20 +923,7 @@ export class SigningComponent implements OnInit {
   }
 
   onViewerZoneClick(event: MouseEvent): void {
-    if (this.placementMode() !== 'manual' && this.zoneTarget() === 'signature') return;
-    if (this.draggingTarget()) return;
-    const target = event.currentTarget as HTMLElement;
-    const rect = target.getBoundingClientRect();
-    const x = Math.min(Math.max((event.clientX - rect.left) / rect.width, 0), 1);
-    const y = Math.min(Math.max((event.clientY - rect.top) / rect.height, 0), 1);
-    if (this.zoneTarget() === 'stamp') {
-      this.stampZone.set({ x, y });
-      this.stampPage.set(this.pdfPage());
-      this.zoneTarget.set('signature'); // Retour au mode signature après placement
-    } else {
-      this.signatureZone.set({ x, y });
-      this.signaturePage.set(this.pdfPage());
-    }
+    return;
   }
 
   private getRelativePosition(event: PointerEvent | MouseEvent, target: HTMLElement): { x: number; y: number } {
@@ -965,26 +934,15 @@ export class SigningComponent implements OnInit {
   }
 
   startDragMarker(kind: 'signature' | 'stamp', event: PointerEvent): void {
-    if (kind === 'signature' && this.placementMode() !== 'manual') return;
-    event.preventDefault();
-    event.stopPropagation();
-    this.draggingTarget.set(kind);
+    return;
   }
 
   onOverlayPointerMove(event: PointerEvent): void {
-    const dragging = this.draggingTarget();
-    if (!dragging) return;
-    const target = event.currentTarget as HTMLElement;
-    const { x, y } = this.getRelativePosition(event, target);
-    if (dragging === 'stamp') {
-      this.stampZone.set({ x, y });
-    } else {
-      this.signatureZone.set({ x, y });
-    }
+    return;
   }
 
   onOverlayPointerUp(): void {
-    this.draggingTarget.set(null);
+    return;
   }
 
   sigXPercent(): number { return Math.round((this.signatureZone()?.x ?? 0.15) * 100); }
@@ -993,25 +951,19 @@ export class SigningComponent implements OnInit {
   stampYPercent(): number { return Math.round(this.stampZone().y * 100); }
 
   updateSigX(v: string): void {
-    const cur = this.signatureZone() ?? { x: 0.15, y: 0.90 };
-    this.signatureZone.set({ ...cur, x: Math.min(Math.max(Number(v) / 100, 0), 1) });
+    return;
   }
 
   updateSigY(v: string): void {
-    const cur = this.signatureZone() ?? { x: 0.15, y: 0.90 };
-    this.signatureZone.set({ ...cur, y: Math.min(Math.max(Number(v) / 100, 0), 1) });
+    return;
   }
 
   updateSigPage(v: string): void {
-    const page = Math.max(1, Math.floor(Number(v) || 1));
-    const clamped = Math.min(page, Math.max(1, this.pdfTotalPages()));
-    this.signaturePage.set(clamped);
-    this.pdfPage.set(clamped);
+    return;
   }
 
   setPlacementMode(mode: 'smart' | 'manual'): void {
-    this.placementMode.set(mode);
-    if (mode === 'smart') this.applySmartSignaturePlacement();
+    return;
   }
 
   applySmartSignaturePlacement(): void {
@@ -1020,6 +972,8 @@ export class SigningComponent implements OnInit {
     this.signaturePage.set(total);
     this.pdfPage.set(total);
     this.signatureZone.set({ x: 0.78, y: 0.86 });
+    this.stampPage.set(total);
+    this.stampZone.set({ x: 0.78, y: 0.86 });
     this.goToSignatureZone();
   }
 
@@ -1045,16 +999,15 @@ export class SigningComponent implements OnInit {
   }
 
   updateStampX(v: string): void {
-    this.stampZone.set({ ...this.stampZone(), x: Math.min(Math.max(Number(v) / 100, 0), 1) });
+    return;
   }
 
   updateStampY(v: string): void {
-    this.stampZone.set({ ...this.stampZone(), y: Math.min(Math.max(Number(v) / 100, 0), 1) });
+    return;
   }
 
   updateStampPage(v: string): void {
-    const page = Math.max(1, Math.floor(Number(v) || 1));
-    this.stampPage.set(Math.min(page, Math.max(1, this.pdfTotalPages())));
+    return;
   }
 
   // ── Zoom & Pan ────────────────────────────────
@@ -1168,7 +1121,7 @@ export class SigningComponent implements OnInit {
   }
 
   activateStampZonePicker(): void {
-    this.zoneTarget.set(this.zoneTarget() === 'stamp' ? 'signature' : 'stamp');
+    return;
   }
 
   onStampFileChange(event: Event): void {
@@ -1253,6 +1206,29 @@ export class SigningComponent implements OnInit {
   }
 
   getDocUrl(docId: number): string { return this.api.getPublicDocumentUrl(this.token, docId); }
+
+  previousDocumentRevisions(): Array<{ revision_no: number; replaced_at: string; docs: PreviousEnvelopeDocument[] }> {
+    const docs = this.envelope()?.previous_documents ?? [];
+    const byRevision = new Map<number, { revision_no: number; replaced_at: string; docs: PreviousEnvelopeDocument[] }>();
+
+    for (const doc of docs) {
+      const revisionNo = Number(doc.revision_no || 0);
+      if (!byRevision.has(revisionNo)) {
+        byRevision.set(revisionNo, {
+          revision_no: revisionNo,
+          replaced_at: doc.replaced_at,
+          docs: [],
+        });
+      }
+      const revision = byRevision.get(revisionNo)!;
+      revision.docs.push(doc);
+      if (new Date(doc.replaced_at).getTime() > new Date(revision.replaced_at).getTime()) {
+        revision.replaced_at = doc.replaced_at;
+      }
+    }
+
+    return Array.from(byRevision.values()).sort((a, b) => b.revision_no - a.revision_no);
+  }
 
   // ── Canvas signature pad ──────────────────────────────────
   startDraw(e: PointerEvent): void {

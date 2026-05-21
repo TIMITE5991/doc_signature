@@ -6,11 +6,11 @@
 </div>
 
 <div *ngIf="error()" class="alert alert-danger">{{ error() }}</div>
-<div *ngIf="submitted() && (form.invalid || recipientsArray.invalid || recipientsArray.length === 0 || selectedDocs().length === 0)" class="alert alert-danger">
+<div *ngIf="submitted() && sendOnCreate && (form.invalid || recipientsArray.invalid || recipientsArray.length === 0 || selectedDocs().length === 0)" class="alert alert-danger">
   Veuillez corriger les erreurs ci-dessous avant de soumettre.
 </div>
 
-<form [formGroup]="form" (ngSubmit)="submit()">
+<form [formGroup]="form" (ngSubmit)="submit()" novalidate>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:start">
 
     <!-- LEFT: envelope info -->
@@ -58,7 +58,12 @@
         </div>
         <div *ngFor="let doc of myDocs()" class="doc-item">
           <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
-            <input type="checkbox" [value]="doc.id_document" (change)="toggleDoc($event, doc.id_document)" />
+            <input
+              type="checkbox"
+              [value]="doc.id_document"
+              [checked]="selectedDocs().includes(doc.id_document)"
+              [disabled]="selectedAttachments().includes(doc.id_document)"
+              (change)="toggleDoc($event, doc.id_document)" />
             <span style="font-size:13px">
               <strong>{{ doc.original_name }}</strong>
               <span style="color:var(--text-muted)"> – {{ formatSize(doc.size) }}</span>
@@ -67,6 +72,43 @@
         </div>
         <div class="error-msg mt-1" *ngIf="submitted() && selectedDocs().length === 0">
           Sélectionnez au moins un document
+        </div>
+      </div>
+
+      <div class="card mt-2">
+        <h3 class="section-title">Pièces jointes (optionnel)</h3>
+        <p style="font-size:12px;color:var(--text-muted);margin-bottom:10px">
+          Ces fichiers accompagnent le document principal mais ne sont pas soumis à signature.
+        </p>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+          <label class="btn btn-outline btn-sm" style="cursor:pointer;margin:0">
+            📎 Importer des pièces jointes
+            <input type="file" multiple style="display:none" (change)="onAttachmentFilesSelected($event)" />
+          </label>
+          <span style="font-size:12px;color:var(--text-muted)" *ngIf="uploadingAttachments()">
+            Upload en cours...
+          </span>
+        </div>
+        <div class="error-msg mt-1" *ngIf="attachmentUploadError()">
+          {{ attachmentUploadError() }}
+        </div>
+        <div class="loading-center" *ngIf="loadingDocs()"><div class="spinner" style="width:24px;height:24px;border-width:2px"></div></div>
+        <div class="empty-state" style="padding:20px" *ngIf="!loadingDocs() && myDocs().length === 0">
+          <p>Aucun document disponible. <a [routerLink]="['/documents']">Ajouter des documents →</a></p>
+        </div>
+        <div *ngFor="let doc of myDocs()" class="doc-item">
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+            <input
+              type="checkbox"
+              [value]="doc.id_document"
+              [checked]="selectedAttachments().includes(doc.id_document)"
+              [disabled]="selectedDocs().includes(doc.id_document)"
+              (change)="toggleAttachment($event, doc.id_document)" />
+            <span style="font-size:13px">
+              <strong>{{ doc.original_name }}</strong>
+              <span style="color:var(--text-muted)"> – {{ formatSize(doc.size) }}</span>
+            </span>
+          </label>
         </div>
       </div>
     </div>
@@ -299,10 +341,10 @@
   <div class="d-flex gap-2 justify-between mt-3">
     <button type="button" class="btn btn-outline" (click)="cancel()">Annuler</button>
     <div class="d-flex gap-1">
-      <button type="submit" class="btn btn-outline" [disabled]="saving()" (click)="sendOnCreate = false">
+      <button type="button" class="btn btn-outline" [disabled]="saving()" (click)="saveDraft()">
         💾 Enregistrer brouillon
       </button>
-      <button type="submit" class="btn btn-primary" [disabled]="saving()" (click)="sendOnCreate = true">
+      <button type="button" class="btn btn-primary" [disabled]="saving()" (click)="createAndSend()">
         {{ saving() ? 'Envoi...' : '✉️ Créer et envoyer' }}
       </button>
     </div>

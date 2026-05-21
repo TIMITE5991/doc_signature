@@ -90,6 +90,36 @@ CREATE TABLE t_envelope_documents (
 );
 
 -- ============================================================
+-- ENVELOPE <-> ATTACHMENTS (many-to-many, non signés)
+-- ============================================================
+CREATE TABLE t_envelope_attachments (
+  id            INT AUTO_INCREMENT PRIMARY KEY,
+  id_envelope   INT NOT NULL,
+  id_document   INT NOT NULL,
+  created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_envelope_attachment (id_envelope, id_document),
+  FOREIGN KEY (id_envelope) REFERENCES t_envelopes(id_envelope) ON DELETE CASCADE,
+  FOREIGN KEY (id_document) REFERENCES t_documents(id_document) ON DELETE RESTRICT
+);
+
+-- ============================================================
+-- ENVELOPE DOCUMENT HISTORY (versions précédentes)
+-- ============================================================
+CREATE TABLE t_envelope_document_history (
+  id               INT AUTO_INCREMENT PRIMARY KEY,
+  id_envelope      INT NOT NULL,
+  id_document      INT NOT NULL,
+  revision_no      INT NOT NULL,
+  id_replaced_by   INT NULL,
+  replaced_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_env_revision (id_envelope, revision_no),
+  INDEX idx_env_doc (id_envelope, id_document),
+  FOREIGN KEY (id_envelope) REFERENCES t_envelopes(id_envelope) ON DELETE CASCADE,
+  FOREIGN KEY (id_document) REFERENCES t_documents(id_document) ON DELETE RESTRICT,
+  FOREIGN KEY (id_replaced_by) REFERENCES t_users(id_user) ON DELETE SET NULL
+);
+
+-- ============================================================
 -- RECIPIENTS
 -- ============================================================
 CREATE TABLE t_recipients (

@@ -42,7 +42,7 @@ export class DocumentsController {
           cb(null, `${uuidv4()}${ext}`);
         },
       }),
-      limits: { fileSize: parseInt(process.env.MAX_FILE_SIZE || '10485760', 10) },
+      limits: { fileSize: parseInt(process.env.MAX_FILE_SIZE || '52428800', 10) },
       fileFilter: (_req, file, cb) => {
         if (ALLOWED_MIME.includes(file.mimetype)) {
           cb(null, true);

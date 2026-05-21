@@ -1,6 +1,6 @@
 import { Component, ChangeDetectionStrategy, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { RouterLink } from '@angular/router';
+import { ActivatedRoute, RouterLink } from '@angular/router';
 import { ApiService } from '../../../core/services/api.service';
 import { Envelope } from '../../../core/models';
 
@@ -54,6 +54,12 @@ import { Envelope } from '../../../core/models';
                 <a [routerLink]="['/envelopes', e.id_envelope]" style="font-weight:500;color:var(--primary)">
                   {{ e.title }}
                 </a>
+                <span
+                  *ngIf="(e.attachment_count || 0) > 0"
+                  class="attachment-chip"
+                  [title]="(e.attachment_count || 0) + ' pièce(s) jointe(s)'">
+                  📎 {{ e.attachment_count }} PJ
+                </span>
                 <div style="font-size:11px;color:var(--text-muted)" *ngIf="e.subject">{{ e.subject }}</div>
               </td>
               <td><span [class]="'badge badge-' + badgeClass(e.status)">{{ statusLabel(e.status) }}</span></td>
@@ -83,6 +89,18 @@ import { Envelope } from '../../../core/models';
       &:hover:not(.active) { border-color: var(--primary); color: var(--primary); }
     }
     .filter-count { background: rgba(0,0,0,0.1); border-radius: 10px; padding: 0 6px; font-size: 11px; }
+    .attachment-chip {
+      display: inline-flex;
+      align-items: center;
+      margin-left: 8px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      color: #5b3c00;
+      background: #fff1d6;
+      border: 1px solid #ffd28f;
+    }
   `],
 })
 export class EnvelopesListComponent implements OnInit {
@@ -98,9 +116,14 @@ export class EnvelopesListComponent implements OnInit {
     { key: 'REJECTED',    label: 'Rejetées' },
   ];
 
-  constructor(private api: ApiService) {}
+  constructor(private api: ApiService, private route: ActivatedRoute) {}
 
   ngOnInit(): void {
+    const requestedFilter = (this.route.snapshot.queryParamMap.get('filter') || '').toUpperCase();
+    if (this.filters.some(f => f.key === requestedFilter)) {
+      this.activeFilter.set(requestedFilter);
+    }
+
     this.api.getEnvelopes().subscribe({
       next: (list) => { this.envelopes.set(list); this.loading.set(false); },
       error: () => this.loading.set(false),

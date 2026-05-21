@@ -37,6 +37,12 @@ export interface Document {
   created_at: string;
 }
 
+export interface PreviousEnvelopeDocument extends Document {
+  revision_no: number;
+  replaced_at: string;
+  replaced_by?: number | null;
+}
+
 export interface Template {
   id_template: number;
   name: string;
@@ -88,6 +94,9 @@ export interface Envelope {
   updated_at: string;
   recipients?: Recipient[];
   documents?: Document[];
+  attachments?: Document[];
+  attachment_count?: number;
+  previous_documents?: PreviousEnvelopeDocument[];
 }
 
 export interface AuditLog {

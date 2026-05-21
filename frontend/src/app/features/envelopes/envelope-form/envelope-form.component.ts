@@ -19,9 +19,12 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
   loadingDocs  = signal(true);
   saving       = signal(false);
   error        = signal('');
+  attachmentUploadError = signal('');
   submitted    = signal(false);
   myDocs       = signal<Document[]>([]);
   selectedDocs = signal<number[]>([]);
+  selectedAttachments = signal<number[]>([]);
+  uploadingAttachments = signal(false);
   sendOnCreate = false;
 
   zoneRecipientIdx = signal(0);
@@ -130,6 +133,9 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
   toggleDoc(event: Event, id: number): void {
     const checked = (event.target as HTMLInputElement).checked;
     this.selectedDocs.update(ids => checked ? (ids.includes(id) ? ids : [...ids, id]) : ids.filter(d => d !== id));
+    if (checked) {
+      this.selectedAttachments.update(ids => ids.filter(d => d !== id));
+    }
     if (!checked) {
       this.zoneDocBlobCache.delete(id);
       const objectUrl = this.zonePreviewObjectUrlCache.get(id);
@@ -140,6 +146,49 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
     }
     this.normalizeZoneDocMap();
     setTimeout(() => this.refreshZonePreview(), 0);
+  }
+
+  toggleAttachment(event: Event, id: number): void {
+    const checked = (event.target as HTMLInputElement).checked;
+    this.selectedAttachments.update(ids => checked ? (ids.includes(id) ? ids : [...ids, id]) : ids.filter(d => d !== id));
+    if (checked) {
+      this.selectedDocs.update(ids => ids.filter(d => d !== id));
+      this.normalizeZoneDocMap();
+      setTimeout(() => this.refreshZonePreview(), 0);
+    }
+  }
+
+  onAttachmentFilesSelected(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const files = Array.from(input.files || []);
+    if (!files.length) return;
+
+    this.uploadingAttachments.set(true);
+    this.attachmentUploadError.set('');
+
+    const uploadNext = (index: number) => {
+      if (index >= files.length) {
+        this.uploadingAttachments.set(false);
+        input.value = '';
+        return;
+      }
+
+      this.api.uploadDocument(files[index]).subscribe({
+        next: (doc) => {
+          this.myDocs.update((docs) => [doc, ...docs]);
+          this.selectedAttachments.update((ids) => (ids.includes(doc.id_document) ? ids : [...ids, doc.id_document]));
+          this.selectedDocs.update((ids) => ids.filter((id) => id !== doc.id_document));
+          uploadNext(index + 1);
+        },
+        error: (err) => {
+          this.attachmentUploadError.set(this.extractUploadErrorMessage(err));
+          this.uploadingAttachments.set(false);
+          input.value = '';
+        },
+      });
+    };
+
+    uploadNext(0);
   }
 
   selectZoneRecipient(i: number): void {
@@ -324,24 +373,49 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
     this.sigZones.set(updated);
   }
 
+  saveDraft(): void {
+    this.sendOnCreate = false;
+    this.submit();
+  }
+
+  createAndSend(): void {
+    this.sendOnCreate = true;
+    this.submit();
+  }
+
   submit(): void {
     this.submitted.set(true);
-    if (this.form.invalid || this.recipientsArray.invalid || this.recipientsArray.length === 0 || this.selectedDocs().length === 0) {
+    this.error.set('');
+
+    // Draft save is intentionally permissive: only title/circuit are required.
+    // Full validation stays enforced for "Créer et envoyer".
+    if (this.sendOnCreate && (this.form.invalid || this.recipientsArray.invalid || this.recipientsArray.length === 0 || this.selectedDocs().length === 0)) {
       this.form.markAllAsTouched();
       this.recipientsArray.markAllAsTouched();
       this.recipientsArray.controls.forEach(g => g.markAllAsTouched());
       return;
     }
-    if (this.hasStrictSequentialOrderIssue()) {
+    if (!this.sendOnCreate && (this.form.get('title')?.invalid || this.form.get('circuit_type')?.invalid)) {
+      this.form.markAllAsTouched();
+      return;
+    }
+
+    if (this.sendOnCreate && this.hasStrictSequentialOrderIssue()) {
       this.error.set('Pour un circuit séquentiel strict, l\'ordre doit être unique et successif (1, 2, 3...).');
       this.recipientsArray.markAllAsTouched();
       return;
     }
+
     this.saving.set(true);
+    const recipients = this.sendOnCreate
+      ? this.normalizeRecipients()
+      : this.normalizeRecipientsForDraft();
+
     const payload = {
       ...this.form.value,
       document_ids: this.selectedDocs(),
-      recipients:   this.normalizeRecipients(),
+      attachment_ids: this.selectedAttachments(),
+      recipients,
       expires_at:   this.form.value.expires_at || undefined,
     };
     if (this.sendOnCreate) {
@@ -350,15 +424,15 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
           sessionStorage.setItem('envelope_flash', JSON.stringify({ type: 'success', msg: '✅ Enveloppe créée et envoyée avec succès !' }));
           this.router.navigate(['/envelopes', env.id_envelope]);
         },
-        error: (err) => { this.error.set(err.message); this.saving.set(false); },
+        error: (err) => { this.error.set(this.extractErrorMessage(err)); this.saving.set(false); },
       });
     } else {
       this.api.createEnvelope(payload).subscribe({
-        next: (env) => {
+        next: () => {
           sessionStorage.setItem('envelope_flash', JSON.stringify({ type: 'success', msg: '💾 Brouillon enregistré avec succès.' }));
-          this.router.navigate(['/envelopes', env.id_envelope]);
+          this.router.navigate(['/envelopes'], { queryParams: { filter: 'DRAFT' } });
         },
-        error: (err) => { this.error.set(err.message); this.saving.set(false); },
+        error: (err) => { this.error.set(this.extractErrorMessage(err)); this.saving.set(false); },
       });
     }
   }
@@ -404,6 +478,56 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
         signature_zone: encodedZone,
       };
     });
+  }
+
+  private normalizeRecipientsForDraft() {
+    return this.recipientsArray.controls
+      .map((group, i) => {
+        const raw = group.value as { first_name?: string; last_name?: string; email?: string; role?: string; signing_order?: number; };
+        const email = (raw.email || '').trim().toLowerCase();
+        if (!email) return null;
+        if (!/^[^@]+@cgrae\.ci$/.test(email)) return null;
+
+        const localPart = email.split('@')[0] || '';
+        const parts = localPart.split(/[._-]+/).filter(Boolean);
+        const fallbackFirst = parts[0] || 'Agent';
+        const fallbackLast = parts.slice(1).join(' ') || 'CGRAE';
+        const zone = this.sigZones().get(i);
+        const encodedZone = zone
+          ? {
+              ...zone,
+              y_ratio: (Math.max(1, zone.page_number || 1) - 1) + zone.y_ratio,
+            }
+          : undefined;
+
+        return {
+          first_name: (raw.first_name || '').trim() || fallbackFirst,
+          last_name: (raw.last_name || '').trim() || fallbackLast,
+          email,
+          role: raw.role || 'SIGNATORY',
+          signing_order: Number(raw.signing_order) > 0 ? raw.signing_order : (i + 1),
+          signature_zone: encodedZone,
+        };
+      })
+      .filter((r): r is NonNullable<typeof r> => !!r);
+  }
+
+  private extractErrorMessage(err: any): string {
+    return err?.error?.message || err?.message || 'Une erreur est survenue lors de l\'enregistrement.';
+  }
+
+  private extractUploadErrorMessage(err: any): string {
+    const status = Number(err?.status || 0);
+    const rawMessage = Array.isArray(err?.error?.message)
+      ? err.error.message.join(' ')
+      : (err?.error?.message || err?.message || '');
+    const normalizedMessage = String(rawMessage).toLowerCase();
+
+    if (status === 413 || normalizedMessage.includes('payload too large') || normalizedMessage.includes('file too large')) {
+      return 'Fichier trop volumineux. Taille maximale autorisée : 50 Mo.';
+    }
+
+    return rawMessage || 'Échec de l\'upload des pièces jointes.';
   }
 
 

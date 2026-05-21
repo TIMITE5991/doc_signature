@@ -59,6 +59,16 @@ export class CreateEnvelopeDto {
   @IsNumber({}, { each: true })
   document_ids: number[];
 
+  @ApiProperty({
+    type: [Number],
+    required: false,
+    description: 'IDs des pièces jointes (non signées) à joindre à l\'enveloppe',
+  })
+  @IsArray()
+  @IsNumber({}, { each: true })
+  @IsOptional()
+  attachment_ids?: number[];
+
   @ApiProperty({ type: [RecipientDto] })
   @IsArray()
   @ValidateNested({ each: true })
@@ -97,15 +107,15 @@ export class DelegateDto {
   @IsEmail()
   delegate_email: string;
 
-  @ApiProperty({ example: 'Marie' })
+  @ApiProperty({ example: 'Marie', required: false })
   @IsString()
-  @IsNotEmpty()
-  delegate_first_name: string;
+  @IsOptional()
+  delegate_first_name?: string;
 
-  @ApiProperty({ example: 'Dupont' })
+  @ApiProperty({ example: 'Dupont', required: false })
   @IsString()
-  @IsNotEmpty()
-  delegate_last_name: string;
+  @IsOptional()
+  delegate_last_name?: string;
 }
 
 export class ForwardRecipientDto {

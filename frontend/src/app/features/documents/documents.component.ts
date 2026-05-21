@@ -483,7 +483,7 @@ export class DocumentsComponent implements OnInit {
         this.cdr.detectChanges();
       },
       error: (err) => {
-        this.error.set(err?.error?.message || err.message || 'Erreur lors du téléchargement');
+        this.error.set(this.extractUploadErrorMessage(err));
         this.uploading.set(false);
         // Reset input file even on error
         input.value = '';
@@ -520,6 +520,20 @@ export class DocumentsComponent implements OnInit {
   filteredDocuments(): Document[] {
     const archived = this.viewMode() === 'archived';
     return this.documents().filter((doc) => !!doc.is_archived === archived);
+  }
+
+  private extractUploadErrorMessage(err: any): string {
+    const status = Number(err?.status || 0);
+    const rawMessage = Array.isArray(err?.error?.message)
+      ? err.error.message.join(' ')
+      : (err?.error?.message || err?.message || '');
+    const normalizedMessage = String(rawMessage).toLowerCase();
+
+    if (status === 413 || normalizedMessage.includes('payload too large') || normalizedMessage.includes('file too large')) {
+      return 'Fichier trop volumineux. Taille maximale autorisée : 50 Mo.';
+    }
+
+    return rawMessage || 'Erreur lors du téléchargement';
   }
 
   formatSize(bytes: number): string {

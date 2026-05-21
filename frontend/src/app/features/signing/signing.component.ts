@@ -1,7 +1,7 @@
 ﻿import { Component, ChangeDetectionStrategy, OnInit, signal, ViewChild, ElementRef, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule, ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import { DomSanitizer, SafeResourceUrl, SafeHtml } from '@angular/platform-browser';
 import { ApiService } from '../../core/services/api.service';
 import { Envelope, Recipient, PreviousEnvelopeDocument } from '../../core/models';
@@ -22,6 +22,8 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'approve' | 'reject' | 'dele
           <p>Plateforme de Signature Électronique</p>
         </div>
       </div>
+
+      <div class="alert alert-success" *ngIf="redirectingNotice()">{{ redirectingNotice() }}</div>
 
       <!-- Loading -->
       <div class="signing-card" *ngIf="step() === 'loading'">
@@ -59,11 +61,17 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'approve' | 'reject' | 'dele
         <h2 *ngIf="doneMessage() === 'forwarded'">Document renvoyé à un nouveau destinataire</h2>
         <p *ngIf="doneMessage() !== 'returned'">L'émetteur du document a été notifié par email.</p>
         <p *ngIf="doneMessage() === 'returned'">L'émetteur a été notifié par email et va procéder aux corrections demandées.</p>
+        <p *ngIf="doneMessage() === 'signed'" style="margin-top:10px">
+          Souhaitez-vous aussi renvoyer ce document à un autre destinataire ?
+        </p>
         <div class="mt-2" style="display:flex;flex-direction:column;gap:10px;align-items:center">
           <button type="button" class="btn btn-primary" (click)="step.set('forward')" *ngIf="doneMessage() === 'signed'">
-            🔁 Renvoyer à un destinataire
+            ✅ Oui, renvoyer
           </button>
-          <button type="button" class="btn btn-outline" (click)="goBackToViewer()">
+          <button type="button" class="btn btn-outline" (click)="redirectToDashboard('Traitement terminé')" *ngIf="doneMessage() === 'signed'">
+            ❌ Non, aller au tableau de bord
+          </button>
+          <button type="button" class="btn btn-outline" (click)="goBackToViewer()" *ngIf="doneMessage() !== 'signed'">
             ← Retour
           </button>
         </div>
@@ -427,16 +435,6 @@ type Step = 'loading' | 'already-signed' | 'sign' | 'approve' | 'reject' | 'dele
         <h2>Renvoyer à un destinataire</h2>
         <p>Le nouveau destinataire recevra le même lien de réception/signature.</p>
         <form [formGroup]="forwardForm" (ngSubmit)="forwardAfterSign()">
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-            <div class="form-group mt-2">
-              <label>Prénom *</label>
-              <input type="text" formControlName="forward_first_name" />
-            </div>
-            <div class="form-group mt-2">
-              <label>Nom *</label>
-              <input type="text" formControlName="forward_last_name" />
-            </div>
-          </div>
           <div class="form-group">
             <label>Email &#64;cgrae.ci *</label>
             <input type="email" formControlName="forward_email" placeholder="nouveau.destinataire&#64;cgrae.ci" />
@@ -465,6 +463,7 @@ export class SigningComponent implements OnInit {
   envelope    = signal<Envelope | null>(null);
   recipient   = signal<Recipient | null>(null);
   processing  = signal(false);
+  redirectingNotice = signal('');
   signErrorMessage = signal('');
   errorTitle  = signal('Lien invalide ou expiré');
   errorDetail = signal('Ce lien de signature n\'est plus valide. Veuillez contacter l\'émetteur du document.');
@@ -522,13 +521,12 @@ export class SigningComponent implements OnInit {
     delegate_email:      ['', [Validators.required, Validators.pattern(/^[^@]+@cgrae\.ci$/)]],
   });
   forwardForm = this.fb.group({
-    forward_first_name: ['', Validators.required],
-    forward_last_name:  ['', Validators.required],
     forward_email:      ['', [Validators.required, Validators.pattern(/^[^@]+@cgrae\.ci$/)]],
   });
 
   constructor(
     private route: ActivatedRoute,
+    private router: Router,
     private api: ApiService,
     private fb: FormBuilder,
     private sanitizer: DomSanitizer,
@@ -882,14 +880,11 @@ export class SigningComponent implements OnInit {
             this.activeDocIndex.set(0);
             this.xlsxHtml.set(null);
             this.processing.set(false);
-            this.doneMessage.set('approved');
-            this.step.set('done');
-            this.cdr.detectChanges();
+            this.redirectToDashboard();
           },
           error: () => {
             this.processing.set(false);
-            this.doneMessage.set('approved');
-            this.step.set('done');
+            this.redirectToDashboard();
           },
         });
       },
@@ -1173,7 +1168,10 @@ export class SigningComponent implements OnInit {
     if (this.rejectForm.invalid) return;
     this.processing.set(true);
     this.api.rejectDocument(this.token, this.rejectForm.value.reason!).subscribe({
-      next: () => { this.processing.set(false); this.doneMessage.set('rejected'); this.step.set('done'); },
+      next: () => {
+        this.processing.set(false);
+        this.redirectToDashboard('Document rejeté');
+      },
       error: () => this.processing.set(false),
     });
   }
@@ -1191,7 +1189,10 @@ export class SigningComponent implements OnInit {
     if (this.returnForm.invalid) return;
     this.processing.set(true);
     this.api.returnForCorrection(this.token, this.returnForm.value.reason!).subscribe({
-      next: () => { this.processing.set(false); this.doneMessage.set('returned'); this.step.set('done'); },
+      next: () => {
+        this.processing.set(false);
+        this.redirectToDashboard('Retour pour corrections envoyé');
+      },
       error: () => this.processing.set(false),
     });
   }
@@ -1200,9 +1201,19 @@ export class SigningComponent implements OnInit {
     if (this.forwardForm.invalid) return;
     this.processing.set(true);
     this.api.forwardAfterSign(this.token, this.forwardForm.value).subscribe({
-      next: () => { this.processing.set(false); this.doneMessage.set('forwarded'); this.step.set('done'); },
+      next: () => {
+        this.processing.set(false);
+        this.redirectToDashboard('Document renvoyé avec succès');
+      },
       error: () => this.processing.set(false),
     });
+  }
+
+  private redirectToDashboard(prefix = 'Signature réussie'): void {
+    this.redirectingNotice.set(`${prefix}. Redirection vers le tableau de bord...`);
+    setTimeout(() => {
+      this.router.navigate(['/dashboard']);
+    }, 1500);
   }
 
   getDocUrl(docId: number): string { return this.api.getPublicDocumentUrl(this.token, docId); }

@@ -23,9 +23,16 @@ export class DocumentsService {
     const [user] = await this.db('t_users').where('id_user', userId).select('email');
     if (!user) return [];
 
+    const ownDocEnvelopeMap = this.db('t_envelope_documents')
+      .select('id_document')
+      .max({ source_envelope_id: 'id_envelope' })
+      .groupBy('id_document')
+      .as('oed');
+
     const ownDocs = await this.db('t_documents as d')
+      .leftJoin(ownDocEnvelopeMap, 'oed.id_document', 'd.id_document')
       .where('d.created_by', userId)
-      .select('d.*', this.db.raw("'OWN' as source_type"), this.db.raw('NULL as source_envelope_id'));
+      .select('d.*', this.db.raw("'OWN' as source_type"), 'oed.source_envelope_id');
 
     const receivedDocs = await this.db('t_documents as d')
       .join('t_envelope_documents as ed', 'ed.id_document', 'd.id_document')
@@ -57,6 +64,9 @@ export class DocumentsService {
         const a = archiveMap.get(d.id_document);
         return {
           ...d,
+          source_envelope_ref: d.source_envelope_id
+            ? `ENV-${String(d.source_envelope_id).padStart(6, '0')}`
+            : null,
           is_archived: !!a?.is_archived,
           archived_at: a?.archived_at || null,
         };

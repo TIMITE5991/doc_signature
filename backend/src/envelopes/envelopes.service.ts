@@ -814,6 +814,11 @@ export class EnvelopesService {
       throw new BadRequestException('Le destinataire doit avoir un email @cgrae.ci');
     }
 
+    const emailLocalPart = (dto.forward_email || '').split('@')[0] || 'destinataire';
+    const nameParts = emailLocalPart.split(/[._-]+/).filter(Boolean);
+    const forwardFirstName = (dto.forward_first_name || nameParts[0] || 'Nouveau').trim();
+    const forwardLastName = (dto.forward_last_name || nameParts.slice(1).join(' ') || 'Destinataire').trim();
+
     const [currentRecipient] = await this.db('t_recipients').where('token', token);
     if (!currentRecipient) throw new NotFoundException('Lien de signature invalide');
     if (![RecipientStatus.SIGNED, RecipientStatus.APPROVED].includes(currentRecipient.status)) {
@@ -830,8 +835,8 @@ export class EnvelopesService {
     await this.db('t_recipients').insert({
       id_envelope: currentRecipient.id_envelope,
       email: dto.forward_email,
-      first_name: dto.forward_first_name,
-      last_name: dto.forward_last_name,
+      first_name: forwardFirstName,
+      last_name: forwardLastName,
       role: currentRecipient.role,
       signing_order: nextOrder,
       status: RecipientStatus.SENT,
@@ -846,7 +851,7 @@ export class EnvelopesService {
     const [sender] = await this.db('t_users').where('id_user', env.created_by);
     this.emailService.sendSignatureRequest(
       dto.forward_email,
-      `${dto.forward_first_name} ${dto.forward_last_name}`,
+      `${forwardFirstName} ${forwardLastName}`,
       env.title,
       `${sender.first_name} ${sender.last_name}`,
       newToken,
@@ -864,7 +869,7 @@ export class EnvelopesService {
 
     await this.notificationsService.create(
       env.created_by,
-      `${currentRecipient.first_name} ${currentRecipient.last_name} a renvoyé le document "${env.title}" à ${dto.forward_first_name} ${dto.forward_last_name}.`,
+      `${currentRecipient.first_name} ${currentRecipient.last_name} a renvoyé le document "${env.title}" à ${forwardFirstName} ${forwardLastName}.`,
       env.id_envelope,
     );
 
@@ -1010,6 +1015,11 @@ export class EnvelopesService {
       throw new BadRequestException('Le destinataire doit avoir un email @cgrae.ci');
     }
 
+    const emailLocalPart = (dto.forward_email || '').split('@')[0] || 'destinataire';
+    const nameParts = emailLocalPart.split(/[._-]+/).filter(Boolean);
+    const forwardFirstName = (dto.forward_first_name || nameParts[0] || 'Nouveau').trim();
+    const forwardLastName = (dto.forward_last_name || nameParts.slice(1).join(' ') || 'Destinataire').trim();
+
     const [env] = await this.db('t_envelopes').where('id_envelope', envelopeId);
     if (!env) throw new NotFoundException('Enveloppe non trouvée');
     if (env.created_by !== userId) throw new ForbiddenException('Accès refusé');
@@ -1032,8 +1042,8 @@ export class EnvelopesService {
       await trx('t_recipients').insert({
         id_envelope: envelopeId,
         email: dto.forward_email,
-        first_name: dto.forward_first_name,
-        last_name: dto.forward_last_name,
+        first_name: forwardFirstName,
+        last_name: forwardLastName,
         role: 'SIGNATORY',
         signing_order: nextOrder,
         status: RecipientStatus.SENT,
@@ -1049,7 +1059,7 @@ export class EnvelopesService {
     const [sender] = await this.db('t_users').where('id_user', userId);
     this.emailService.sendSignatureRequest(
       dto.forward_email,
-      `${dto.forward_first_name} ${dto.forward_last_name}`,
+      `${forwardFirstName} ${forwardLastName}`,
       env.title,
       `${sender.first_name} ${sender.last_name}`,
       newToken,

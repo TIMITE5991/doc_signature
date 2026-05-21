@@ -35,6 +35,18 @@ import { Document } from '../../core/models';
           Archives
         </button>
       </div>
+
+      <div *ngIf="viewMode() === 'archived'" style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input
+          type="text"
+          [value]="archiveSearchInput()"
+          (input)="archiveSearchInput.set($any($event.target).value)"
+          (keyup.enter)="applyArchiveSearch()"
+          placeholder="Rechercher un document archivé..."
+          style="min-width:260px;max-width:420px;flex:1" />
+        <button class="btn btn-primary btn-sm" type="button" (click)="applyArchiveSearch()">Rechercher</button>
+        <button class="btn btn-outline btn-sm" type="button" (click)="clearArchiveSearch()" *ngIf="archiveSearchTerm()">Réinitialiser</button>
+      </div>
     </div>
 
     <div class="loading-center" *ngIf="loading()"><div class="spinner"></div></div>
@@ -52,6 +64,7 @@ import { Document } from '../../core/models';
           <thead>
             <tr>
               <th>Nom du fichier</th>
+              <th>Référence</th>
               <th>Type</th>
               <th>Taille</th>
               <th>Version</th>
@@ -64,6 +77,10 @@ import { Document } from '../../core/models';
               <td>
                 <span style="font-weight:500">{{ doc.original_name }}</span>
                 <span *ngIf="doc.source_type === 'RECEIVED'" class="badge badge-warning" style="margin-left:8px">Reçu signé</span>
+              </td>
+              <td style="font-size:12px;color:var(--text-muted)">
+                <span *ngIf="envelopeRef(doc)" class="badge badge-sent">{{ envelopeRef(doc) }}</span>
+                <span *ngIf="!envelopeRef(doc)">—</span>
               </td>
               <td><span class="badge badge-sent">{{ mimeLabel(doc.mime_type) }}</span></td>
               <td style="color:var(--text-muted);font-size:13px">{{ formatSize(doc.size) }}</td>
@@ -287,6 +304,8 @@ export class DocumentsComponent implements OnInit {
   documents = signal<Document[]>([]);
   viewMode  = signal<'active' | 'archived'>('active');
   error     = signal('');
+  archiveSearchInput = signal('');
+  archiveSearchTerm = signal('');
 
   // Viewer state
   viewingDoc    = signal<Document | null>(null);
@@ -519,7 +538,34 @@ export class DocumentsComponent implements OnInit {
 
   filteredDocuments(): Document[] {
     const archived = this.viewMode() === 'archived';
-    return this.documents().filter((doc) => !!doc.is_archived === archived);
+    let result = this.documents().filter((doc) => !!doc.is_archived === archived);
+
+    if (archived && this.archiveSearchTerm().trim()) {
+      const query = this.archiveSearchTerm().trim().toLowerCase();
+      result = result.filter((doc) => {
+        const name = (doc.original_name || '').toLowerCase();
+        const mime = this.mimeLabel(doc.mime_type || '').toLowerCase();
+        const ref = this.envelopeRef(doc).toLowerCase();
+        return name.includes(query) || mime.includes(query) || ref.includes(query);
+      });
+    }
+
+    return result;
+  }
+
+  applyArchiveSearch(): void {
+    this.archiveSearchTerm.set(this.archiveSearchInput().trim());
+  }
+
+  clearArchiveSearch(): void {
+    this.archiveSearchInput.set('');
+    this.archiveSearchTerm.set('');
+  }
+
+  envelopeRef(doc: Document): string {
+    if (doc.source_envelope_ref) return doc.source_envelope_ref;
+    if (!doc.source_envelope_id) return '';
+    return `ENV-${String(doc.source_envelope_id).padStart(6, '0')}`;
   }
 
   private extractUploadErrorMessage(err: any): string {

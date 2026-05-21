@@ -123,13 +123,13 @@ export class ForwardRecipientDto {
   @IsEmail()
   forward_email: string;
 
-  @ApiProperty({ example: 'Nouveau' })
+  @ApiProperty({ example: 'Nouveau', required: false })
   @IsString()
-  @IsNotEmpty()
-  forward_first_name: string;
+  @IsOptional()
+  forward_first_name?: string;
 
-  @ApiProperty({ example: 'Destinataire' })
+  @ApiProperty({ example: 'Destinataire', required: false })
   @IsString()
-  @IsNotEmpty()
-  forward_last_name: string;
+  @IsOptional()
+  forward_last_name?: string;
 }

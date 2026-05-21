@@ -32,6 +32,7 @@ export interface Document {
   created_by: number;
   source_type?: 'OWN' | 'RECEIVED';
   source_envelope_id?: number | null;
+  source_envelope_ref?: string | null;
   is_archived?: boolean;
   archived_at?: string;
   created_at: string;

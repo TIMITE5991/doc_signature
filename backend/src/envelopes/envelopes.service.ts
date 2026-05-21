@@ -678,11 +678,12 @@ export class EnvelopesService {
     fs.writeFileSync(outputPath, out);
   }
 
-  async reject(id: number, token: string, dto: RejectEnvelopeDto, ipAddress: string) {
+  async reject(token: string, dto: RejectEnvelopeDto, ipAddress: string) {
     const [recipient] = await this.db('t_recipients').where('token', token);
     if (!recipient) throw new NotFoundException('Lien invalide');
 
-    const [envelope] = await this.db('t_envelopes').where('id_envelope', id);
+    const envelopeId = recipient.id_envelope;
+    const [envelope] = await this.db('t_envelopes').where('id_envelope', envelopeId);
     if (!envelope) throw new NotFoundException('Enveloppe non trouvée');
     this.assertPublicEnvelopeAccessible(envelope);
 
@@ -691,7 +692,7 @@ export class EnvelopesService {
       rejection_reason: dto.reason,
     });
 
-    await this.db('t_envelopes').where('id_envelope', id).update({ status: EnvelopeStatus.REJECTED });
+    await this.db('t_envelopes').where('id_envelope', envelopeId).update({ status: EnvelopeStatus.REJECTED });
 
     const [sender] = await this.db('t_users').where('id_user', envelope.created_by);
 
@@ -706,10 +707,10 @@ export class EnvelopesService {
     await this.notificationsService.create(
       sender.id_user,
       `${recipient.first_name} ${recipient.last_name} a rejeté le document : "${envelope.title}"`,
-      id,
+      envelopeId,
     );
 
-    await this.logAudit(id, 'DOCUMENT_REJECTED', recipient.id_user, ipAddress, {
+    await this.logAudit(envelopeId, 'DOCUMENT_REJECTED', recipient.id_user, ipAddress, {
       reason: dto.reason,
     });
 

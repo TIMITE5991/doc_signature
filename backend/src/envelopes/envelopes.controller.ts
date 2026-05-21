@@ -173,7 +173,7 @@ export class EnvelopesController {
     @Body() dto: RejectEnvelopeDto,
     @Ip() ip: string,
   ) {
-    return this.envelopesService.reject(null, token, dto, ip);
+    return this.envelopesService.reject(token, dto, ip);
   }
 
   @Post('sign/:token/delegate')

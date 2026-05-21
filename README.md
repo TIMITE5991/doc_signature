@@ -105,6 +105,8 @@ npm run seed
 
 # Démarrer en mode développement
 npm run start:dev
+# ou (alias tolérant)
+npm run startdev
 ```
 
 L'API sera disponible sur **http://localhost:3000**  
@@ -122,6 +124,8 @@ npm install
 ng serve
 # ou
 npm start
+# ou (alias)
+npm run dev
 ```
 
 L'application sera disponible sur **http://localhost:4200**

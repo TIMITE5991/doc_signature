@@ -42,7 +42,7 @@ import { Document } from '../../core/models';
           [value]="archiveSearchInput()"
           (input)="archiveSearchInput.set($any($event.target).value)"
           (keyup.enter)="applyArchiveSearch()"
-          placeholder="Rechercher un document archivé..."
+          placeholder="Rechercher par référence, nom ou date d'archivage (jj/mm/aaaa)"
           style="min-width:260px;max-width:420px;flex:1" />
         <button class="btn btn-primary btn-sm" type="button" (click)="applyArchiveSearch()">Rechercher</button>
         <button class="btn btn-outline btn-sm" type="button" (click)="clearArchiveSearch()" *ngIf="archiveSearchTerm()">Réinitialiser</button>
@@ -64,7 +64,7 @@ import { Document } from '../../core/models';
           <thead>
             <tr>
               <th>Nom du fichier</th>
-              <th>Référence</th>
+              <th>Réf. document</th>
               <th>Type</th>
               <th>Taille</th>
               <th>Version</th>
@@ -79,13 +79,17 @@ import { Document } from '../../core/models';
                 <span *ngIf="doc.source_type === 'RECEIVED'" class="badge badge-warning" style="margin-left:8px">Reçu signé</span>
               </td>
               <td style="font-size:12px;color:var(--text-muted)">
-                <span *ngIf="envelopeRef(doc)" class="badge badge-sent">{{ envelopeRef(doc) }}</span>
-                <span *ngIf="!envelopeRef(doc)">—</span>
+                <span class="badge badge-sent">{{ documentRef(doc) }}</span>
+                <div *ngIf="envelopeRef(doc)" style="margin-top:4px;font-size:11px;color:var(--text-muted)">
+                  Dossier: {{ envelopeRef(doc) }}
+                </div>
               </td>
               <td><span class="badge badge-sent">{{ mimeLabel(doc.mime_type) }}</span></td>
               <td style="color:var(--text-muted);font-size:13px">{{ formatSize(doc.size) }}</td>
               <td style="color:var(--text-muted);font-size:13px">v{{ doc.version }}</td>
-              <td style="color:var(--text-muted);font-size:13px">{{ doc.created_at | date:'dd/MM/yyyy' }}</td>
+              <td style="color:var(--text-muted);font-size:13px">
+                {{ (doc.archived_at || doc.created_at) | date:'dd/MM/yyyy' }}
+              </td>
               <td>
                 <button class="btn-icon" title="Visualiser" (click)="openViewer(doc)">👁</button>
                 <button class="btn-icon" title="Archiver" *ngIf="!doc.is_archived" (click)="archive(doc)">🗃️</button>
@@ -104,6 +108,7 @@ import { Document } from '../../core/models';
         <div class="viewer-header">
           <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0">
             <span class="viewer-title">{{ viewingDoc()?.original_name }}</span>
+            <span class="badge badge-sent" *ngIf="viewingDoc()" style="font-size:11px">{{ documentRef(viewingDoc()!) }}</span>
             <span class="doc-type-badge" *ngIf="viewingDoc()">
               <span *ngIf="isPdfViewing()">📑 PDF</span>
               <span *ngIf="isImageViewing()">🖼️ Image</span>
@@ -545,8 +550,13 @@ export class DocumentsComponent implements OnInit {
       result = result.filter((doc) => {
         const name = (doc.original_name || '').toLowerCase();
         const mime = this.mimeLabel(doc.mime_type || '').toLowerCase();
-        const ref = this.envelopeRef(doc).toLowerCase();
-        return name.includes(query) || mime.includes(query) || ref.includes(query);
+        const documentRef = this.documentRef(doc).toLowerCase();
+        const envelopeRef = this.envelopeRef(doc).toLowerCase();
+        const archiveDate = this.archiveDateSearchValue(doc);
+        return name.includes(query)
+          || documentRef.includes(query)
+          || envelopeRef.includes(query)
+          || archiveDate.includes(query);
       });
     }
 
@@ -562,10 +572,28 @@ export class DocumentsComponent implements OnInit {
     this.archiveSearchTerm.set('');
   }
 
+  documentRef(doc: Document): string {
+    if (doc.document_ref) return doc.document_ref;
+    return `DOC-${String(doc.id_document).padStart(6, '0')}`;
+  }
+
   envelopeRef(doc: Document): string {
     if (doc.source_envelope_ref) return doc.source_envelope_ref;
     if (!doc.source_envelope_id) return '';
     return `ENV-${String(doc.source_envelope_id).padStart(6, '0')}`;
+  }
+
+  private archiveDateSearchValue(doc: Document): string {
+    const value = doc.archived_at || doc.created_at;
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value).toLowerCase();
+
+    const year = String(date.getFullYear());
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+
+    return `${day}/${month}/${year} ${year}-${month}-${day}`.toLowerCase();
   }
 
   private extractUploadErrorMessage(err: any): string {

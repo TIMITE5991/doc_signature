@@ -22,6 +22,7 @@ export interface User {
 
 export interface Document {
   id_document: number;
+  document_ref?: string | null;
   name: string;
   original_name: string;
   path: string;

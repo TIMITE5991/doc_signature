@@ -6,6 +6,24 @@ import * as fs from 'fs';
 export class DocumentsService {
   constructor(@Inject('DATABASE') private db: Knex) {}
 
+  private formatDocumentRef(id: number | null | undefined): string | null {
+    if (!id) return null;
+    return `DOC-${String(id).padStart(6, '0')}`;
+  }
+
+  private formatEnvelopeRef(id: number | null | undefined): string | null {
+    if (!id) return null;
+    return `ENV-${String(id).padStart(6, '0')}`;
+  }
+
+  private enrichDocument(doc: any): any {
+    return {
+      ...doc,
+      document_ref: this.formatDocumentRef(doc.id_document),
+      source_envelope_ref: this.formatEnvelopeRef(doc.source_envelope_id),
+    };
+  }
+
   async create(file: Express.Multer.File, userId: number) {
     const [id] = await this.db('t_documents').insert({
       name: file.filename,
@@ -63,10 +81,7 @@ export class DocumentsService {
       .map((d) => {
         const a = archiveMap.get(d.id_document);
         return {
-          ...d,
-          source_envelope_ref: d.source_envelope_id
-            ? `ENV-${String(d.source_envelope_id).padStart(6, '0')}`
-            : null,
+          ...this.enrichDocument(d),
           is_archived: !!a?.is_archived,
           archived_at: a?.archived_at || null,
         };
@@ -77,7 +92,7 @@ export class DocumentsService {
   async findById(id: number) {
     const [doc] = await this.db('t_documents').where('id_document', id);
     if (!doc) throw new NotFoundException('Document non trouvé');
-    return doc;
+    return this.enrichDocument(doc);
   }
 
   async remove(id: number, userId: number) {

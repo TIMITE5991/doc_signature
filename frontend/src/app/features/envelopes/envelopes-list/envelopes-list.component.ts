@@ -62,7 +62,7 @@ import { Envelope } from '../../../core/models';
                 </span>
                 <div style="font-size:11px;color:var(--text-muted)" *ngIf="e.subject">{{ e.subject }}</div>
               </td>
-              <td><span [class]="'badge badge-' + badgeClass(e.status)">{{ statusLabel(e.status) }}</span></td>
+              <td><span [class]="'badge badge-' + badgeClass(effectiveStatus(e))">{{ statusLabel(effectiveStatus(e)) }}</span></td>
               <td style="font-size:13px;color:var(--text-muted)">{{ circuitLabel(e.circuit_type) }}</td>
               <td style="font-size:13px;color:var(--text-muted)">{{ e.recipients?.length ?? '—' }}</td>
               <td style="font-size:13px;color:var(--text-muted)">
@@ -112,6 +112,7 @@ export class EnvelopesListComponent implements OnInit {
     { key: 'ALL',         label: 'Toutes' },
     { key: 'DRAFT',       label: 'Brouillons' },
     { key: 'IN_PROGRESS', label: 'En cours' },
+    { key: 'EXPIRED',     label: 'Non traités (délai dépassé)' },
     { key: 'COMPLETED',   label: 'Complétées' },
     { key: 'REJECTED',    label: 'Rejetées' },
   ];
@@ -133,18 +134,53 @@ export class EnvelopesListComponent implements OnInit {
   filtered(): Envelope[] {
     const f = this.activeFilter();
     if (f === 'ALL') return this.envelopes();
-    if (f === 'IN_PROGRESS') return this.envelopes().filter(e => e.status === 'IN_PROGRESS' || e.status === 'SENT');
-    return this.envelopes().filter(e => e.status === f);
+    if (f === 'IN_PROGRESS') {
+      return this.envelopes().filter((e) => {
+        const status = this.effectiveStatus(e);
+        return status === 'IN_PROGRESS' || status === 'SENT';
+      });
+    }
+    if (f === 'EXPIRED') {
+      return this.envelopes().filter((e) => this.effectiveStatus(e) === 'EXPIRED');
+    }
+    return this.envelopes().filter(e => this.effectiveStatus(e) === f);
   }
 
   countByStatus(key: string): number {
     if (key === 'ALL') return this.envelopes().length;
-    if (key === 'IN_PROGRESS') return this.envelopes().filter(e => e.status === 'IN_PROGRESS' || e.status === 'SENT').length;
-    return this.envelopes().filter(e => e.status === key).length;
+    if (key === 'IN_PROGRESS') {
+      return this.envelopes().filter((e) => {
+        const status = this.effectiveStatus(e);
+        return status === 'IN_PROGRESS' || status === 'SENT';
+      }).length;
+    }
+    if (key === 'EXPIRED') return this.envelopes().filter((e) => this.effectiveStatus(e) === 'EXPIRED').length;
+    return this.envelopes().filter(e => this.effectiveStatus(e) === key).length;
+  }
+
+  private isDeadlineExceeded(envelope: Envelope): boolean {
+    if (!envelope.expires_at) return false;
+
+    const status = envelope.status;
+    if (status === 'EXPIRED') return true;
+    if (['COMPLETED', 'REJECTED', 'CANCELLED', 'DRAFT'].includes(status)) return false;
+
+    const expiration = new Date(envelope.expires_at);
+    if (Number.isNaN(expiration.getTime())) return false;
+
+    if (expiration.getHours() === 0 && expiration.getMinutes() === 0 && expiration.getSeconds() === 0) {
+      expiration.setHours(23, 59, 59, 999);
+    }
+
+    return expiration.getTime() < Date.now();
+  }
+
+  effectiveStatus(envelope: Envelope): Envelope['status'] {
+    return this.isDeadlineExceeded(envelope) ? 'EXPIRED' : envelope.status;
   }
 
   statusLabel(s: string): string {
-    const m: Record<string, string> = { DRAFT: 'Brouillon', SENT: 'Envoyé', IN_PROGRESS: 'En cours', COMPLETED: 'Complété', REJECTED: 'Rejeté', EXPIRED: 'Expiré', CANCELLED: 'Annulé' };
+    const m: Record<string, string> = { DRAFT: 'Brouillon', SENT: 'Envoyé', IN_PROGRESS: 'En cours', COMPLETED: 'Complété', REJECTED: 'Rejeté', EXPIRED: 'Non traité (délai dépassé)', CANCELLED: 'Annulé' };
     return m[s] || s;
   }
 

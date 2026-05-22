@@ -12,6 +12,7 @@ import {
   DelegateDto,
   ReturnCorrectionDto,
   ForwardRecipientDto,
+  ReactivateEnvelopeDto,
 } from './dto/envelope.dto';
 import { JwtGuard } from '../auth/jwt.guard';
 
@@ -101,6 +102,18 @@ export class EnvelopesController {
     @Request() req,
   ) {
     return this.envelopesService.closeByCreator(id, req.user.id_user);
+  }
+
+  @Post(':id/reactivate')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Remettre une enveloppe expirée dans le circuit avec une nouvelle date limite' })
+  reactivateByCreator(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ReactivateEnvelopeDto,
+    @Request() req,
+  ) {
+    return this.envelopesService.reactivateByCreator(id, req.user.id_user, dto.expires_at);
   }
 
   // Public routes (no JWT - accessed via token link)

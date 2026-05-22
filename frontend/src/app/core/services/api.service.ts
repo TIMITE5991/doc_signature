@@ -154,6 +154,10 @@ export class ApiService {
     return this.http.post(`${this.base}/envelopes/${id}/cancel`, {});
   }
 
+  reactivateEnvelope(id: number, expires_at: string): Observable<Envelope> {
+    return this.http.post<Envelope>(`${this.base}/envelopes/${id}/reactivate`, { expires_at });
+  }
+
   // Public signing endpoints (no auth token)
   getPublicEnvelope(token: string): Observable<Envelope> {
     return this.http.get<Envelope>(`${this.base}/envelopes/sign/${token}`);

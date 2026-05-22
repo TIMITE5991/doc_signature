@@ -58,6 +58,13 @@ import { Envelope } from '../../core/models';
           <div class="stat-label">Brouillons</div>
         </div>
       </div>
+      <div class="stat-card">
+        <div class="stat-icon" style="background:#f2ebff">⌛</div>
+        <div>
+          <div class="stat-value">{{ counts.expired }}</div>
+          <div class="stat-label">Non traités (délai dépassé)</div>
+        </div>
+      </div>
     </div>
 
     <div class="loading-center" *ngIf="loading()"><div class="spinner"></div></div>
@@ -92,7 +99,11 @@ import { Envelope } from '../../core/models';
                   {{ e.title }}
                 </a>
               </td>
-              <td><span [class]="'badge badge-' + e.status.toLowerCase().replace('_','-')">{{ statusLabel(e.status) }}</span></td>
+              <td>
+                <span [class]="'badge badge-' + effectiveStatus(e).toLowerCase().replace('_','-')">
+                  {{ statusLabel(effectiveStatus(e)) }}
+                </span>
+              </td>
               <td style="font-size:13px;color:var(--text-muted)">{{ e.circuit_type }}</td>
               <td style="font-size:13px;color:var(--text-muted)">{{ e.created_at | date:'dd/MM/yyyy' }}</td>
             </tr>
@@ -106,7 +117,7 @@ export class DashboardComponent implements OnInit {
   loading = signal(true);
   recent: Envelope[] = [];
   today = new Date();
-  counts = { total: 0, draft: 0, in_progress: 0, completed: 0, rejected: 0 };
+  counts = { total: 0, draft: 0, in_progress: 0, completed: 0, rejected: 0, expired: 0 };
 
   constructor(public auth: AuthService, private api: ApiService) {}
 
@@ -116,19 +127,42 @@ export class DashboardComponent implements OnInit {
         this.recent = envs.slice(0, 10);
         this.counts.total       = envs.length;
         this.counts.draft       = envs.filter(e => e.status === 'DRAFT').length;
-        this.counts.in_progress = envs.filter(e => e.status === 'IN_PROGRESS' || e.status === 'SENT').length;
+        this.counts.in_progress = envs.filter(e => (e.status === 'IN_PROGRESS' || e.status === 'SENT') && !this.isDeadlineExceeded(e)).length;
         this.counts.completed   = envs.filter(e => e.status === 'COMPLETED').length;
         this.counts.rejected    = envs.filter(e => e.status === 'REJECTED').length;
+        this.counts.expired     = envs.filter(e => this.effectiveStatus(e) === 'EXPIRED').length;
         this.loading.set(false);
       },
       error: () => this.loading.set(false),
     });
   }
 
+  private isDeadlineExceeded(envelope: Envelope): boolean {
+    if (!envelope.expires_at) return false;
+
+    const status = envelope.status;
+    if (status === 'EXPIRED') return true;
+    if (['COMPLETED', 'REJECTED', 'CANCELLED', 'DRAFT'].includes(status)) return false;
+
+    const expiration = new Date(envelope.expires_at);
+    if (Number.isNaN(expiration.getTime())) return false;
+
+    // Date-only values are treated as end-of-day deadlines.
+    if (expiration.getHours() === 0 && expiration.getMinutes() === 0 && expiration.getSeconds() === 0) {
+      expiration.setHours(23, 59, 59, 999);
+    }
+
+    return expiration.getTime() < Date.now();
+  }
+
+  effectiveStatus(envelope: Envelope): Envelope['status'] {
+    return this.isDeadlineExceeded(envelope) ? 'EXPIRED' : envelope.status;
+  }
+
   statusLabel(status: string): string {
     const map: Record<string, string> = {
       DRAFT: 'Brouillon', SENT: 'Envoyé', IN_PROGRESS: 'En cours',
-      COMPLETED: 'Complété', REJECTED: 'Rejeté', EXPIRED: 'Expiré', CANCELLED: 'Annulé',
+      COMPLETED: 'Complété', REJECTED: 'Rejeté', EXPIRED: 'Non traité (délai dépassé)', CANCELLED: 'Annulé',
     };
     return map[status] || status;
   }

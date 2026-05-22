@@ -133,3 +133,9 @@ export class ForwardRecipientDto {
   @IsOptional()
   forward_last_name?: string;
 }
+
+export class ReactivateEnvelopeDto {
+  @ApiProperty({ example: '2026-06-15' })
+  @IsDateString()
+  expires_at: string;
+}

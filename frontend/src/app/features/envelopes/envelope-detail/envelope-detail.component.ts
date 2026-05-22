@@ -72,6 +72,20 @@ import { Envelope, AuditLog, Recipient, PreviousEnvelopeDocument } from '../../.
             </div>
           </div>
 
+          <div class="card mb-2" *ngIf="canReactivate()">
+            <h3 class="section-title">Remettre dans le circuit</h3>
+            <p style="font-size:13px;color:var(--text-muted);margin-bottom:10px">
+              Ce parapheur est non traité (délai dépassé). Choisissez une nouvelle échéance pour le relancer.
+            </p>
+            <div class="form-group" style="max-width:260px">
+              <label>Nouvelle date limite</label>
+              <input type="date" [(ngModel)]="reactivateDate" />
+            </div>
+            <button class="btn btn-primary" type="button" [disabled]="reactivateLoading()" (click)="reactivateEnvelope()">
+              {{ reactivateLoading() ? 'Relance...' : '🔄 Remettre dans le circuit' }}
+            </button>
+          </div>
+
           <!-- Documents -->
           <div class="card">
             <h3 class="section-title">Documents</h3>
@@ -258,11 +272,13 @@ export class EnvelopeDetailComponent implements OnInit {
   loadingAudit = signal(true);
   correctionLoading = signal(false);
   forwardLoading = signal(false);
+  reactivateLoading = signal(false);
   error        = signal('');
   successMsg   = signal('');
   envelope     = signal<Envelope | null>(null);
   auditLogs    = signal<AuditLog[]>([]);
   correctionFiles = signal<File[]>([]);
+  reactivateDate = this.tomorrowDateIso();
   forwardFirstName = '';
   forwardLastName = '';
   forwardEmail = '';
@@ -289,7 +305,13 @@ export class EnvelopeDetailComponent implements OnInit {
     }
 
     this.api.getEnvelope(id).subscribe({
-      next: (env) => { this.envelope.set(env); this.loading.set(false); },
+      next: (env) => {
+        this.envelope.set(env);
+        if (env.expires_at) {
+          this.reactivateDate = String(env.expires_at).slice(0, 10);
+        }
+        this.loading.set(false);
+      },
       error: (err) => { this.error.set(err.message); this.loading.set(false); },
     });
     this.api.getEnvelopeAudit(id).subscribe({
@@ -460,6 +482,35 @@ export class EnvelopeDetailComponent implements OnInit {
     return this.canSend() && (s === 'DRAFT' || s === 'SENT' || s === 'IN_PROGRESS' || s === 'REVISION');
   }
 
+  canReactivate(): boolean {
+    return this.canSend() && this.envelope()?.status === 'EXPIRED';
+  }
+
+  reactivateEnvelope(): void {
+    if (!this.envelope()) return;
+
+    const expiresAt = (this.reactivateDate || '').trim();
+    if (!expiresAt) {
+      this.error.set('Veuillez choisir une nouvelle date limite.');
+      return;
+    }
+
+    this.error.set('');
+    this.reactivateLoading.set(true);
+
+    this.api.reactivateEnvelope(this.envelope()!.id_envelope, expiresAt).subscribe({
+      next: (env) => {
+        this.envelope.set(env);
+        this.successMsg.set('Parapheur remis dans le circuit avec une nouvelle date limite.');
+        this.reactivateLoading.set(false);
+      },
+      error: (err) => {
+        this.error.set(err.message);
+        this.reactivateLoading.set(false);
+      },
+    });
+  }
+
   myPendingRecipient(): Recipient | null {
     const userEmail = this.auth.user?.email?.toLowerCase();
     if (!userEmail || !this.envelope()?.recipients?.length) return null;
@@ -500,10 +551,19 @@ export class EnvelopeDetailComponent implements OnInit {
       ENVELOPE_COMPLETED: '✅ Processus terminé',
       ENVELOPE_CLOSED_BY_CREATOR: '✅ Circuit clôturé par le créateur',
       CIRCUIT_FORWARDED_BY_CREATOR: '🔁 Circuit relancé vers un nouveau destinataire',
+      ENVELOPE_REACTIVATED_BY_CREATOR: '🔄 Enveloppe remise dans le circuit',
       DOCUMENTS_REPLACED: '🗂 Documents corrigés remplacés',
       ENVELOPE_CANCELLED: '🚫 Enveloppe annulée', SIGNATURE_DELEGATED: '🔀 Signature déléguée',
     };
     return m[a] || a;
+  }
+
+  private tomorrowDateIso(): string {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    const month = `${d.getMonth() + 1}`.padStart(2, '0');
+    const day = `${d.getDate()}`.padStart(2, '0');
+    return `${d.getFullYear()}-${month}-${day}`;
   }
 
   getDocViewUrl(docId: number): string { return this.api.getDocumentViewUrl(docId); }

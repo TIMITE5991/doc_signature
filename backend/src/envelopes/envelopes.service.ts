@@ -28,6 +28,7 @@ export class EnvelopesService {
   ) {}
 
   async findAll(userId: number, role: string) {
+    await this.expireOverdueEnvelopes();
     await this.ensureEnvelopeAttachmentsTable();
 
     const query = this.db('t_envelopes as e')
@@ -46,6 +47,7 @@ export class EnvelopesService {
   }
 
   async findById(id: number) {
+    await this.expireOverdueEnvelopes();
     await this.ensureEnvelopeDocumentHistoryTable();
     await this.ensureEnvelopeAttachmentsTable();
 
@@ -257,7 +259,7 @@ export class EnvelopesService {
 
     const [envelope] = await this.db('t_envelopes').where('id_envelope', recipient.id_envelope);
     if (!envelope) throw new NotFoundException('Enveloppe non trouvée');
-    this.assertPublicEnvelopeAccessible(envelope, BadRequestException);
+    await this.assertPublicEnvelopeAccessible(envelope, BadRequestException);
 
     let sigFile: string | undefined;
     if (signatureImage && signatureImage.startsWith('data:image/png;base64,')) {
@@ -685,7 +687,7 @@ export class EnvelopesService {
     const envelopeId = recipient.id_envelope;
     const [envelope] = await this.db('t_envelopes').where('id_envelope', envelopeId);
     if (!envelope) throw new NotFoundException('Enveloppe non trouvée');
-    this.assertPublicEnvelopeAccessible(envelope);
+    await this.assertPublicEnvelopeAccessible(envelope);
 
     await this.db('t_recipients').where('id_recipient', recipient.id_recipient).update({
       status: RecipientStatus.REJECTED,
@@ -732,7 +734,7 @@ export class EnvelopesService {
 
     const [env] = await this.db('t_envelopes').where('id_envelope', recipient.id_envelope);
     if (!env) throw new NotFoundException('Enveloppe non trouvée');
-    this.assertPublicEnvelopeAccessible(env);
+    await this.assertPublicEnvelopeAccessible(env);
 
     const newToken = uuidv4();
     await this.db('t_recipients').where('id_recipient', recipient.id_recipient).update({
@@ -774,7 +776,7 @@ export class EnvelopesService {
 
     const [envelope] = await this.db('t_envelopes').where('id_envelope', recipient.id_envelope);
     if (!envelope) throw new NotFoundException('Enveloppe non trouvée');
-    this.assertPublicEnvelopeAccessible(envelope);
+    await this.assertPublicEnvelopeAccessible(envelope);
 
     await this.db('t_recipients').where('id_recipient', recipient.id_recipient).update({
       status: RecipientStatus.RETURNED,
@@ -827,7 +829,7 @@ export class EnvelopesService {
 
     const [env] = await this.db('t_envelopes').where('id_envelope', currentRecipient.id_envelope);
     if (!env) throw new NotFoundException('Enveloppe non trouvée');
-    this.assertPublicEnvelopeAccessible(env);
+    await this.assertPublicEnvelopeAccessible(env);
 
     const newToken = uuidv4();
     const nextOrder = Number(currentRecipient.signing_order || 0) + 1;
@@ -885,7 +887,7 @@ export class EnvelopesService {
     const [recipient] = await this.db('t_recipients').where('token', token);
     if (!recipient) throw new NotFoundException('Lien invalide ou expiré');
     const envelope = await this.findById(recipient.id_envelope);
-    this.assertPublicEnvelopeAccessible(envelope);
+    await this.assertPublicEnvelopeAccessible(envelope);
     // Indiquer si chaque destinataire possède un cachet
     for (const r of envelope.recipients ?? []) {
       const [u] = r.id_user
@@ -906,7 +908,7 @@ export class EnvelopesService {
     if (!recipient) throw new NotFoundException('Lien invalide ou expiré');
     const [envelope] = await this.db('t_envelopes').where('id_envelope', recipient.id_envelope);
     if (!envelope) throw new NotFoundException('Enveloppe non trouvée');
-    this.assertPublicEnvelopeAccessible(envelope);
+    await this.assertPublicEnvelopeAccessible(envelope);
     const [u] = recipient.id_user
       ? await this.db('t_users').where('id_user', recipient.id_user).select('id_user', 'stamp_path')
       : await this.db('t_users').where('email', recipient.email).select('id_user', 'stamp_path');
@@ -925,7 +927,7 @@ export class EnvelopesService {
     if (!recipient) throw new NotFoundException('Lien invalide ou expiré');
     const [envelope] = await this.db('t_envelopes').where('id_envelope', recipient.id_envelope);
     if (!envelope) throw new NotFoundException('Enveloppe non trouvée');
-    this.assertPublicEnvelopeAccessible(envelope);
+    await this.assertPublicEnvelopeAccessible(envelope);
     const [u] = recipient.id_user
       ? await this.db('t_users').where('id_user', recipient.id_user).select('id_user', 'signature_path')
       : await this.db('t_users').where('email', recipient.email).select('id_user', 'signature_path');
@@ -1116,6 +1118,88 @@ export class EnvelopesService {
     return this.findById(envelopeId);
   }
 
+  async reactivateByCreator(envelopeId: number, userId: number, expiresAt: string) {
+    const [env] = await this.db('t_envelopes').where('id_envelope', envelopeId);
+    if (!env) throw new NotFoundException('Enveloppe non trouvée');
+    if (env.created_by !== userId) throw new ForbiddenException('Accès refusé');
+    if (env.status !== EnvelopeStatus.EXPIRED) {
+      throw new BadRequestException('Seules les enveloppes expirées peuvent être remises dans le circuit');
+    }
+
+    const normalizedExpiration = this.normalizeExpirationInput(expiresAt);
+    const effectiveExpiration = this.getEffectiveExpirationDate(normalizedExpiration);
+    if (!effectiveExpiration || effectiveExpiration.getTime() <= Date.now()) {
+      throw new BadRequestException('La nouvelle date limite doit être dans le futur');
+    }
+
+    const recipients = await this.db('t_recipients').where('id_envelope', envelopeId).orderBy('signing_order');
+    const actionableStatuses = [RecipientStatus.PENDING, RecipientStatus.SENT, RecipientStatus.VIEWED];
+
+    const toNotify = env.circuit_type === 'SEQUENTIAL'
+      ? (() => {
+          const lastProcessedOrder = Math.max(
+            ...recipients
+              .filter((r) =>
+                r.status === RecipientStatus.SIGNED
+                || r.status === RecipientStatus.APPROVED
+                || r.status === RecipientStatus.DELEGATED,
+              )
+              .map((r) => Number(r.signing_order || 0)),
+            0,
+          );
+
+          return recipients.filter((r) =>
+            Number(r.signing_order || 0) === lastProcessedOrder + 1
+            && actionableStatuses.includes(r.status)
+          );
+        })()
+      : recipients.filter((r) => actionableStatuses.includes(r.status));
+
+    if (!toNotify.length) {
+      throw new BadRequestException('Aucun destinataire en attente à relancer sur ce circuit');
+    }
+
+    await this.db('t_envelopes').where('id_envelope', envelopeId).update({
+      status: EnvelopeStatus.IN_PROGRESS,
+      expires_at: normalizedExpiration,
+      completed_at: null,
+    });
+
+    const sender = await this.db('t_users').where('id_user', userId).first();
+    const senderName = `${sender.first_name} ${sender.last_name}`;
+
+    for (const r of toNotify) {
+      await this.db('t_recipients').where('id_recipient', r.id_recipient).update({
+        status: RecipientStatus.SENT,
+      });
+
+      this.emailService.sendSignatureRequest(
+        r.email,
+        `${r.first_name} ${r.last_name}`,
+        env.title,
+        senderName,
+        r.token,
+        env.message,
+      ).catch(err => console.error(`[Email] Échec relance à ${r.email}:`, err));
+
+      const [recipientUser] = await this.db('t_users').where('email', r.email).select('id_user');
+      if (recipientUser) {
+        await this.notificationsService.create(
+          recipientUser.id_user,
+          `Un parapheur expiré a été relancé : "${env.title}". Merci de le traiter avant la nouvelle échéance.`,
+          env.id_envelope,
+        );
+      }
+    }
+
+    await this.logAudit(envelopeId, 'ENVELOPE_REACTIVATED_BY_CREATOR', userId, null, {
+      expires_at: normalizedExpiration,
+      notified_recipients: toNotify.map((r) => r.email),
+    });
+
+    return this.findById(envelopeId);
+  }
+
   private async checkAndAdvanceCircuit(envelopeId: number, sender: any) {
     const allRecipients = await this.db('t_recipients')
       .where('id_envelope', envelopeId)
@@ -1210,7 +1294,7 @@ export class EnvelopesService {
     if (!recipient) throw new NotFoundException('Lien invalide');
     const [envelope] = await this.db('t_envelopes').where('id_envelope', recipient.id_envelope);
     if (!envelope) throw new NotFoundException('Enveloppe non trouvée');
-    this.assertPublicEnvelopeAccessible(envelope);
+    await this.assertPublicEnvelopeAccessible(envelope);
 
     const [link] = await this.db('t_envelope_documents')
       .where('id_envelope', recipient.id_envelope)
@@ -1293,12 +1377,35 @@ export class EnvelopesService {
     return raw;
   }
 
-  private assertPublicEnvelopeAccessible(
-    envelope: { expires_at?: string | Date | null; status?: string },
+  private async expireOverdueEnvelopes(): Promise<void> {
+    await this.db('t_envelopes')
+      .whereIn('status', [EnvelopeStatus.SENT, EnvelopeStatus.IN_PROGRESS, EnvelopeStatus.REVISION])
+      .whereNotNull('expires_at')
+      .andWhere('expires_at', '<', this.db.fn.now())
+      .update({ status: EnvelopeStatus.EXPIRED });
+  }
+
+  private async markEnvelopeExpiredIfNeeded(
+    envelope: { id_envelope?: number; status?: string },
+  ): Promise<void> {
+    if (!envelope.id_envelope) return;
+    if (![EnvelopeStatus.SENT, EnvelopeStatus.IN_PROGRESS, EnvelopeStatus.REVISION].includes(envelope.status as EnvelopeStatus)) {
+      return;
+    }
+
+    await this.db('t_envelopes')
+      .where('id_envelope', envelope.id_envelope)
+      .whereIn('status', [EnvelopeStatus.SENT, EnvelopeStatus.IN_PROGRESS, EnvelopeStatus.REVISION])
+      .update({ status: EnvelopeStatus.EXPIRED });
+  }
+
+  private async assertPublicEnvelopeAccessible(
+    envelope: { id_envelope?: number; expires_at?: string | Date | null; status?: string },
     ExceptionType: typeof NotFoundException | typeof BadRequestException = NotFoundException,
   ) {
     const effectiveExpiration = this.getEffectiveExpirationDate(envelope.expires_at);
     if (effectiveExpiration && effectiveExpiration.getTime() < Date.now()) {
+      await this.markEnvelopeExpiredIfNeeded(envelope);
       throw new ExceptionType('Ce lien de signature a expiré');
     }
 

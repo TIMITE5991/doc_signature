@@ -17,7 +17,7 @@ import * as JSZip from 'jszip';
 import { CreateEnvelopeDto, RejectEnvelopeDto, DelegateDto, ForwardRecipientDto } from './dto/envelope.dto';
 import { EmailService } from '../email/email.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { EnvelopeStatus, RecipientStatus } from '../common/enums';
+import { EnvelopeStatus, RecipientRole, RecipientStatus } from '../common/enums';
 
 @Injectable()
 export class EnvelopesService {
@@ -101,10 +101,14 @@ export class EnvelopesService {
         await trx('t_envelope_attachments').insert({ id_envelope: envId, id_document: attachmentId });
       }
 
+      await this.ensureRecipientSignatureZonesTable(trx);
+
+      const envelopeDocIds = new Set((dto.document_ids || []).map((id) => Number(id)).filter((id) => Number.isFinite(id)));
+
       // Create recipients with tokens
       for (const r of dto.recipients) {
         const [existingUser] = await trx('t_users').where('email', r.email).select('id_user');
-        await trx('t_recipients').insert({
+        const [recipientId] = await trx('t_recipients').insert({
           id_envelope: envId,
           id_user: existingUser?.id_user || null,
           email: r.email,
@@ -118,6 +122,42 @@ export class EnvelopesService {
           sig_y_ratio: r.signature_zone?.y_ratio ?? null,
           sig_doc_id:  r.signature_zone?.doc_id  ?? null,
         });
+
+        if (r.role === RecipientRole.SIGNATORY) {
+          const zonesInput = Array.isArray((r as any).signature_zones)
+            ? (r as any).signature_zones
+            : [];
+
+          const preparedZones: Array<{ id_recipient: number; id_document: number; x_ratio: number; y_ratio: number; page_number: number }> = [];
+
+          for (const zone of zonesInput) {
+            const docId = Number(zone?.doc_id);
+            if (!Number.isFinite(docId) || !envelopeDocIds.has(docId)) continue;
+
+            const x = Math.min(Math.max(Number(zone?.x_ratio), 0), 1);
+            const rawY = Number(zone?.y_ratio);
+            const encodedPage = Number.isFinite(rawY) && rawY > 1 ? Math.floor(rawY) + 1 : 1;
+            const decodedY = Number.isFinite(rawY) && rawY > 1 ? (rawY - Math.floor(rawY)) : rawY;
+            const y = Math.min(Math.max(decodedY || 0.90, 0), 1);
+
+            preparedZones.push({
+              id_recipient: Number(recipientId),
+              id_document: docId,
+              x_ratio: x,
+              y_ratio: y,
+              page_number: Math.max(1, Math.floor(Number(encodedPage || 1))),
+            });
+          }
+
+          const uniqueZones = new Map<string, { id_recipient: number; id_document: number; x_ratio: number; y_ratio: number; page_number: number }>();
+          for (const zone of preparedZones) {
+            uniqueZones.set(`${zone.id_recipient}:${zone.id_document}`, zone);
+          }
+
+          if (uniqueZones.size > 0) {
+            await trx('t_recipient_signature_zones').insert([...uniqueZones.values()]);
+          }
+        }
       }
 
       await trx.commit();
@@ -145,6 +185,12 @@ export class EnvelopesService {
     }
     if (![EnvelopeStatus.DRAFT, EnvelopeStatus.REVISION].includes(envelope.status)) {
       throw new BadRequestException('Cette enveloppe ne peut pas être envoyée dans son état actuel');
+    }
+
+    const effectiveExpiration = this.getEffectiveExpirationDate(envelope.expires_at);
+    if (effectiveExpiration && effectiveExpiration.getTime() < Date.now()) {
+      await this.db('t_envelopes').where('id_envelope', id).update({ status: EnvelopeStatus.EXPIRED });
+      throw new BadRequestException('La date d\'expiration est dépassée. Modifiez la date limite pour remettre ce parapheur dans le circuit.');
     }
 
     await this.db('t_envelopes').where('id_envelope', id).update({
@@ -264,35 +310,34 @@ export class EnvelopesService {
     let signedAttachment: { filename: string; path: string; contentType?: string } | undefined;
 
     if (sigFile && isSignatory) {
-      // Zone prédéfinie par l'émetteur (prioritaire). Sinon, signer tous les documents de l'enveloppe.
+      // Zone prédéfinie par l'émetteur (si définie par document), sinon fallback legacy ou position fournie par le signataire.
       const envelopeDocRows = await this.db('t_envelope_documents')
         .where('id_envelope', envelope.id_envelope)
         .select('id_document');
       const allEnvelopeDocIds = envelopeDocRows.map((row) => Number(row.id_document)).filter((id) => Number.isFinite(id));
-      const targetDocIds = recipient.sig_doc_id
-        ? [Number(recipient.sig_doc_id)]
-        : allEnvelopeDocIds;
+      const targetDocIds = allEnvelopeDocIds;
+
+      const recipientZonesByDoc = new Map<number, { x_ratio: number; y_ratio: number; page_number: number }>();
+      try {
+        const zoneRows = await this.db('t_recipient_signature_zones')
+          .where('id_recipient', recipient.id_recipient)
+          .select('id_document', 'x_ratio', 'y_ratio', 'page_number');
+        for (const row of zoneRows) {
+          const docId = Number(row.id_document);
+          if (!Number.isFinite(docId)) continue;
+          recipientZonesByDoc.set(docId, {
+            x_ratio: Math.min(Math.max(Number(row.x_ratio), 0), 1),
+            y_ratio: Math.min(Math.max(Number(row.y_ratio), 0), 1),
+            page_number: Math.max(1, Math.floor(Number(row.page_number || 1))),
+          });
+        }
+      } catch {
+        // Table absente sur ancienne base: on conserve le fallback legacy t_recipients.sig_*.
+      }
 
       if (targetDocIds.length > 0) {
-        // Backward-compatible page decoding: y_ratio may encode page (page-1 + y).
-        const rawPredefY = recipient.sig_y_ratio != null ? Number(recipient.sig_y_ratio) : NaN;
-        const encodedPage = Number.isFinite(rawPredefY) && rawPredefY > 1 ? Math.floor(rawPredefY) + 1 : 1;
-        const decodedPredefY = Number.isFinite(rawPredefY) && rawPredefY > 1 ? (rawPredefY - Math.floor(rawPredefY)) : rawPredefY;
-        const hasPredefZone = recipient.sig_x_ratio != null && recipient.sig_y_ratio != null;
-        const signaturePage = hasPredefZone
-          ? Math.max(1, encodedPage || 1)
-          : Math.max(1, Math.floor(Number(signaturePosition?.page_number || 1)));
-
-        const xRatio = Math.min(Math.max(
-          recipient.sig_x_ratio != null ? Number(recipient.sig_x_ratio) : (signaturePosition?.x_ratio ?? 0.15), 0), 1);
-        const yRatio = Math.min(Math.max(
-          recipient.sig_y_ratio != null ? (decodedPredefY || 0.90) : (signaturePosition?.y_ratio ?? 0.90), 0), 1);
-
         // Résoudre le chemin du cachet si demandé
         let resolvedStampPath: string | undefined;
-        let stampX = xRatio;
-        let stampY = yRatio;
-        let stampPage = Math.max(1, Math.floor(Number(stampPosition?.page_number || signaturePage || 1)));
         if (useStamp) {
           if (stampImage && stampImage.startsWith('data:image/')) {
             // Cachet fourni inline — sauvegarder comme cachet permanent de l'utilisateur
@@ -326,15 +371,46 @@ export class EnvelopesService {
             }
             if (userRow?.stamp_path && fs.existsSync(userRow.stamp_path)) resolvedStampPath = userRow.stamp_path;
           }
-          if (stampPosition) {
-            stampX = Math.min(Math.max(stampPosition.x_ratio, 0), 1);
-            stampY = Math.min(Math.max(stampPosition.y_ratio, 0), 1);
-            stampPage = Math.max(1, Math.floor(Number(stampPosition.page_number || stampPage || 1)));
-          }
         }
 
         try {
           for (const targetDocId of targetDocIds) {
+            const docZone = recipientZonesByDoc.get(targetDocId);
+            const isLegacyPredefinedDoc =
+              recipient.sig_doc_id != null
+              && Number(recipient.sig_doc_id) === targetDocId
+              && recipient.sig_x_ratio != null
+              && recipient.sig_y_ratio != null;
+
+            let signaturePage = Math.max(1, Math.floor(Number(signaturePosition?.page_number || 1)));
+            let xRatio = Math.min(Math.max(signaturePosition?.x_ratio ?? 0.15, 0), 1);
+            let yRatio = Math.min(Math.max(signaturePosition?.y_ratio ?? 0.90, 0), 1);
+
+            if (docZone) {
+              signaturePage = docZone.page_number;
+              xRatio = docZone.x_ratio;
+              yRatio = docZone.y_ratio;
+            } else if (isLegacyPredefinedDoc) {
+              // Backward-compatible legacy decoding: sig_y_ratio may encode page (page-1 + y).
+              const rawPredefY = Number(recipient.sig_y_ratio);
+              const encodedPage = Number.isFinite(rawPredefY) && rawPredefY > 1 ? Math.floor(rawPredefY) + 1 : 1;
+              const decodedPredefY = Number.isFinite(rawPredefY) && rawPredefY > 1
+                ? (rawPredefY - Math.floor(rawPredefY))
+                : rawPredefY;
+              signaturePage = Math.max(1, encodedPage || 1);
+              xRatio = Math.min(Math.max(Number(recipient.sig_x_ratio), 0), 1);
+              yRatio = Math.min(Math.max(decodedPredefY || 0.90, 0), 1);
+            }
+
+            let stampX = 0.50;
+            let stampY = 0.90;
+            let stampPage = Math.max(1, Math.floor(Number(stampPosition?.page_number || signaturePage || 1)));
+            if (stampPosition) {
+              stampX = Math.min(Math.max(stampPosition.x_ratio, 0), 1);
+              stampY = Math.min(Math.max(stampPosition.y_ratio, 0), 1);
+              stampPage = Math.max(1, Math.floor(Number(stampPosition.page_number || stampPage || 1)));
+            }
+
             const signedDoc = await this.applySignatureOnEnvelopeDocument(
               envelope.id_envelope,
               targetDocId,
@@ -833,6 +909,35 @@ export class EnvelopesService {
     if (!recipient) throw new NotFoundException('Lien invalide ou expiré');
     const envelope = await this.findById(recipient.id_envelope);
     this.assertPublicEnvelopeAccessible(envelope);
+
+    const recipientIds = (envelope.recipients ?? [])
+      .map((r: any) => Number(r.id_recipient))
+      .filter((id: number) => Number.isFinite(id));
+    const zonesByRecipient = new Map<number, Array<{ id_document: number; x_ratio: number; y_ratio: number; page_number: number }>>();
+
+    if (recipientIds.length > 0) {
+      try {
+        const zoneRows = await this.db('t_recipient_signature_zones')
+          .whereIn('id_recipient', recipientIds)
+          .select('id_recipient', 'id_document', 'x_ratio', 'y_ratio', 'page_number');
+
+        for (const row of zoneRows) {
+          const idRecipient = Number(row.id_recipient);
+          if (!Number.isFinite(idRecipient)) continue;
+          const bucket = zonesByRecipient.get(idRecipient) || [];
+          bucket.push({
+            id_document: Number(row.id_document),
+            x_ratio: Math.min(Math.max(Number(row.x_ratio), 0), 1),
+            y_ratio: Math.min(Math.max(Number(row.y_ratio), 0), 1),
+            page_number: Math.max(1, Math.floor(Number(row.page_number || 1))),
+          });
+          zonesByRecipient.set(idRecipient, bucket);
+        }
+      } catch {
+        // Compatibilité ancienne base sans table t_recipient_signature_zones.
+      }
+    }
+
     // Indiquer si chaque destinataire possède un cachet
     for (const r of envelope.recipients ?? []) {
       const [u] = r.id_user
@@ -844,6 +949,7 @@ export class EnvelopesService {
       }
       r.has_stamp = !!(u?.stamp_path && fs.existsSync(u.stamp_path));
       r.has_signature = !!(u?.signature_path && fs.existsSync(u.signature_path));
+      r.predefined_signature_zones = zonesByRecipient.get(Number(r.id_recipient)) || [];
     }
     return envelope;
   }
@@ -929,24 +1035,49 @@ export class EnvelopesService {
         }
       }
 
-      if (Array.isArray(recipientZones) && recipientZones.length > 0) {
-        for (const zone of recipientZones) {
-          const docId = documentIds[zone.doc_index];
-          if (!docId) continue;
+      if (Array.isArray(recipientZones)) {
+        await this.ensureRecipientSignatureZonesTable(trx);
+        const signatoryRecipientIds = (await trx('t_recipients')
+          .where('id_envelope', envelopeId)
+          .where('role', 'SIGNATORY')
+          .pluck('id_recipient')) as number[];
 
-          const x = Math.min(Math.max(Number(zone.x_ratio), 0), 1);
-          const y = Math.min(Math.max(Number(zone.y_ratio), 0), 1);
-          const page = Math.max(1, Math.floor(Number(zone.page_number || 1)));
-
+        if (signatoryRecipientIds.length > 0) {
+          // Les nouvelles zones par document remplacent totalement les anciennes zones de l'enveloppe.
+          await trx('t_recipient_signature_zones').whereIn('id_recipient', signatoryRecipientIds).delete();
           await trx('t_recipients')
             .where('id_envelope', envelopeId)
-            .where('id_recipient', zone.id_recipient)
-            .update({
-              sig_doc_id: docId,
-              sig_x_ratio: x,
-              // Backward-compatible encoding: integer part carries page-1.
-              sig_y_ratio: (page - 1) + y,
-            });
+            .whereIn('id_recipient', signatoryRecipientIds)
+            .update({ sig_doc_id: null, sig_x_ratio: null, sig_y_ratio: null });
+
+          if (recipientZones.length > 0) {
+            const signatorySet = new Set(signatoryRecipientIds.map((id) => Number(id)));
+            const deduped = new Map<string, { id_recipient: number; id_document: number; x_ratio: number; y_ratio: number; page_number: number }>();
+
+            for (const zone of recipientZones) {
+              const recipientId = Number(zone.id_recipient);
+              if (!Number.isFinite(recipientId) || !signatorySet.has(recipientId)) continue;
+
+              const docId = Number(documentIds[Number(zone.doc_index)]);
+              if (!Number.isFinite(docId)) continue;
+
+              const x = Math.min(Math.max(Number(zone.x_ratio), 0), 1);
+              const y = Math.min(Math.max(Number(zone.y_ratio), 0), 1);
+              const page = Math.max(1, Math.floor(Number(zone.page_number || 1)));
+
+              deduped.set(`${recipientId}:${docId}`, {
+                id_recipient: recipientId,
+                id_document: docId,
+                x_ratio: x,
+                y_ratio: y,
+                page_number: page,
+              });
+            }
+
+            if (deduped.size > 0) {
+              await trx('t_recipient_signature_zones').insert([...deduped.values()]);
+            }
+          }
         }
       }
 
@@ -968,6 +1099,24 @@ export class EnvelopesService {
       await trx.rollback();
       throw error;
     }
+  }
+
+  private async ensureRecipientSignatureZonesTable(trx: Knex.Transaction): Promise<void> {
+    await trx.raw(`
+      CREATE TABLE IF NOT EXISTS t_recipient_signature_zones (
+        id_zone INT AUTO_INCREMENT PRIMARY KEY,
+        id_recipient INT NOT NULL,
+        id_document INT NOT NULL,
+        x_ratio DECIMAL(5,4) NOT NULL,
+        y_ratio DECIMAL(5,4) NOT NULL,
+        page_number INT NOT NULL DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_recipient_document_zone (id_recipient, id_document),
+        CONSTRAINT fk_recipient_signature_zone_recipient FOREIGN KEY (id_recipient) REFERENCES t_recipients(id_recipient) ON DELETE CASCADE,
+        CONSTRAINT fk_recipient_signature_zone_document FOREIGN KEY (id_document) REFERENCES t_documents(id_document) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
   }
 
   async forwardByCreator(envelopeId: number, userId: number, dto: ForwardRecipientDto) {
@@ -1092,6 +1241,12 @@ export class EnvelopesService {
       .whereIn('role', ['SIGNATORY', 'APPROVER', 'VIEWER']);
 
     const [env] = await this.db('t_envelopes').where('id_envelope', envelopeId);
+    const effectiveExpiration = this.getEffectiveExpirationDate(env?.expires_at);
+    if (effectiveExpiration && effectiveExpiration.getTime() < Date.now()) {
+      await this.db('t_envelopes').where('id_envelope', envelopeId).update({ status: EnvelopeStatus.EXPIRED });
+      return;
+    }
+
     const allDone = allRecipients.every(
       (r) =>
         r.status === RecipientStatus.SIGNED

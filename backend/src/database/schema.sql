@@ -147,6 +147,23 @@ CREATE TABLE t_recipients (
 );
 
 -- ============================================================
+-- RECIPIENT SIGNATURE ZONES (PAR DOCUMENT)
+-- ============================================================
+CREATE TABLE t_recipient_signature_zones (
+  id_zone           INT AUTO_INCREMENT PRIMARY KEY,
+  id_recipient      INT NOT NULL,
+  id_document       INT NOT NULL,
+  x_ratio           DECIMAL(5,4) NOT NULL COMMENT 'Zone X prédéfinie par document (0..1)',
+  y_ratio           DECIMAL(5,4) NOT NULL COMMENT 'Zone Y prédéfinie par document (0..1)',
+  page_number       INT NOT NULL DEFAULT 1 COMMENT 'Page cible (>=1)',
+  created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_recipient_document_zone (id_recipient, id_document),
+  FOREIGN KEY (id_recipient) REFERENCES t_recipients(id_recipient) ON DELETE CASCADE,
+  FOREIGN KEY (id_document) REFERENCES t_documents(id_document) ON DELETE CASCADE
+);
+
+-- ============================================================
 -- AUDIT LOGS
 -- ============================================================
 CREATE TABLE t_audit_logs (

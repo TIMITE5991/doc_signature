@@ -77,6 +77,12 @@ export interface Recipient {
   sig_x_ratio?: number | null;
   sig_y_ratio?: number | null;
   sig_doc_id?: number | null;
+  predefined_signature_zones?: Array<{
+    id_document: number;
+    x_ratio: number;
+    y_ratio: number;
+    page_number: number;
+  }>;
 }
 
 export interface Envelope {

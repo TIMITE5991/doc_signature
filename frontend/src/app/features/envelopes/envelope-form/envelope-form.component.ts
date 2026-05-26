@@ -35,8 +35,8 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
 
   zoneRecipientIdx = signal(0);
   zoneDocMap       = signal<Map<number, number>>(new Map());
-  zonePageMap      = signal<Map<number, number>>(new Map());
-  sigZones         = signal<Map<number, { x_ratio: number; y_ratio: number; doc_id: number; page_number?: number }>>(new Map());
+  zonePageMap      = signal<Map<string, number>>(new Map());
+  sigZones         = signal<Map<string, { x_ratio: number; y_ratio: number; doc_id: number; page_number?: number }>>(new Map());
   // PDF canvas rendering
   zonePdfTotalPages  = signal(1);
   zonePdfRendering   = signal(false);
@@ -124,12 +124,7 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
 
   removeRecipient(i: number): void {
     this.recipientsArray.removeAt(i);
-    const updated = new Map(this.sigZones());
-    updated.delete(i);
-    this.sigZones.set(updated);
-    const updatedPages = new Map(this.zonePageMap());
-    updatedPages.delete(i);
-    this.zonePageMap.set(updatedPages);
+    this.reindexRecipientZoneMapsAfterRecipientRemoval(i);
     setTimeout(() => this.refreshZonePreview(), 0);
   }
 
@@ -252,13 +247,16 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
   }
 
   hasZones(): boolean { return this.selectedDocs().length > 0 && this.signatoryIndices().length > 0; }
-  hasZone(i: number): boolean { return this.sigZones().has(i); }
-  getZoneX(i: number): number { return (this.sigZones().get(i)?.x_ratio ?? 0) * 100; }
-  getZoneY(i: number): number { return (this.sigZones().get(i)?.y_ratio ?? 0) * 100; }
+  hasZone(i: number): boolean { return !!this.getZoneForCurrentDoc(i); }
+  getZoneX(i: number): number { return (this.getZoneForCurrentDoc(i)?.x_ratio ?? 0) * 100; }
+  getZoneY(i: number): number { return (this.getZoneForCurrentDoc(i)?.y_ratio ?? 0) * 100; }
   zonePercentX(i: number): number { return Math.round(this.getZoneX(i)); }
   zonePercentY(i: number): number { return Math.round(this.getZoneY(i)); }
   getZonePage(i: number): number {
-    return this.zonePageMap().get(i) || this.sigZones().get(i)?.page_number || 1;
+    const docId = this.getRecipientSelectedDocId(i);
+    if (!docId) return 1;
+    const key = this.zoneKey(i, docId);
+    return this.zonePageMap().get(key) || this.sigZones().get(key)?.page_number || 1;
   }
 
   getRecipientLabel(i: number): string {
@@ -343,11 +341,12 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
     const rect    = target.getBoundingClientRect();
     const x_ratio = Math.min(Math.max((event.clientX - rect.left) / rect.width,  0), 1);
     const y_ratio = Math.min(Math.max((event.clientY - rect.top)  / rect.height, 0), 1);
-    const docIndex = this.zoneDocMap().get(recipientIdx) ?? 0;
-    const doc_id   = this.selectedDocs()[docIndex];
-    const page_number = this.zonePageMap().get(recipientIdx) || 1;
+    const doc_id = this.getRecipientSelectedDocId(recipientIdx);
+    if (!doc_id) return;
+    const key = this.zoneKey(recipientIdx, doc_id);
+    const page_number = this.zonePageMap().get(key) || 1;
     const updated  = new Map(this.sigZones());
-    updated.set(recipientIdx, { x_ratio, y_ratio, doc_id, page_number });
+    updated.set(key, { x_ratio, y_ratio, doc_id, page_number });
     this.sigZones.set(updated);
   }
 
@@ -362,26 +361,22 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
     const updated = new Map(this.zoneDocMap());
     updated.set(recipientIdx, safeIndex);
     this.zoneDocMap.set(updated);
-    const existing = this.sigZones().get(recipientIdx);
-    if (existing) {
-      const doc_id   = this.selectedDocs()[safeIndex];
-      const updatedZ = new Map(this.sigZones());
-      updatedZ.set(recipientIdx, { ...existing, doc_id });
-      this.sigZones.set(updatedZ);
-    }
     setTimeout(() => this.refreshZonePreview(), 0);
   }
 
   setZonePageForRecipient(recipientIdx: number, pageValue: string): void {
     const page = Math.max(1, Math.floor(Number(pageValue) || 1));
+    const doc_id = this.getRecipientSelectedDocId(recipientIdx);
+    if (!doc_id) return;
+    const key = this.zoneKey(recipientIdx, doc_id);
     const updated = new Map(this.zonePageMap());
-    updated.set(recipientIdx, page);
+    updated.set(key, page);
     this.zonePageMap.set(updated);
 
-    const existing = this.sigZones().get(recipientIdx);
+    const existing = this.sigZones().get(key);
     if (existing) {
       const updatedZ = new Map(this.sigZones());
-      updatedZ.set(recipientIdx, { ...existing, page_number: page });
+      updatedZ.set(key, { ...existing, page_number: page });
       this.zoneScrollToTop();
       this.sigZones.set(updatedZ);
     }
@@ -396,26 +391,35 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
   }
 
   updateZoneXForRecipient(recipientIdx: number, xValue: string): void {
-    const current = this.sigZones().get(recipientIdx);
+    const doc_id = this.getRecipientSelectedDocId(recipientIdx);
+    if (!doc_id) return;
+    const key = this.zoneKey(recipientIdx, doc_id);
+    const current = this.sigZones().get(key);
     if (!current) return;
     const x_ratio = Math.min(Math.max(Number(xValue) / 100, 0), 1);
     const updated = new Map(this.sigZones());
-    updated.set(recipientIdx, { ...current, x_ratio });
+    updated.set(key, { ...current, x_ratio });
     this.sigZones.set(updated);
   }
 
   updateZoneYForRecipient(recipientIdx: number, yValue: string): void {
-    const current = this.sigZones().get(recipientIdx);
+    const doc_id = this.getRecipientSelectedDocId(recipientIdx);
+    if (!doc_id) return;
+    const key = this.zoneKey(recipientIdx, doc_id);
+    const current = this.sigZones().get(key);
     if (!current) return;
     const y_ratio = Math.min(Math.max(Number(yValue) / 100, 0), 1);
     const updated = new Map(this.sigZones());
-    updated.set(recipientIdx, { ...current, y_ratio });
+    updated.set(key, { ...current, y_ratio });
     this.sigZones.set(updated);
   }
 
   removeZone(recipientIdx: number): void {
+    const doc_id = this.getRecipientSelectedDocId(recipientIdx);
+    if (!doc_id) return;
+    const key = this.zoneKey(recipientIdx, doc_id);
     const updated = new Map(this.sigZones());
-    updated.delete(recipientIdx);
+    updated.delete(key);
     this.sigZones.set(updated);
   }
 
@@ -549,14 +553,18 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
       const parts         = localPart.split(/[._-]+/).filter(Boolean);
       const fallbackFirst = parts[0] || 'Agent';
       const fallbackLast  = parts.slice(1).join(' ') || 'CGRAE';
-      const zone = this.sigZones().get(i);
-      const encodedZone = zone
+      const zones = this.getRecipientZones(i);
+      const encodedZone = zones[0]
         ? {
-            ...zone,
+            ...zones[0],
             // Encode selected page into y_ratio for backward-compatible persistence.
-            y_ratio: (Math.max(1, zone.page_number || 1) - 1) + zone.y_ratio,
+            y_ratio: (Math.max(1, zones[0].page_number || 1) - 1) + zones[0].y_ratio,
           }
         : undefined;
+      const encodedZones = zones.map((zone) => ({
+        ...zone,
+        y_ratio: (Math.max(1, zone.page_number || 1) - 1) + zone.y_ratio,
+      }));
       return {
         first_name:     (raw.first_name || '').trim() || fallbackFirst,
         last_name:      (raw.last_name  || '').trim() || fallbackLast,
@@ -564,6 +572,7 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
         role:           raw.role,
         signing_order:  raw.signing_order,
         signature_zone: encodedZone,
+        signature_zones: encodedZones,
       };
     });
   }
@@ -580,13 +589,17 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
         const parts = localPart.split(/[._-]+/).filter(Boolean);
         const fallbackFirst = parts[0] || 'Agent';
         const fallbackLast = parts.slice(1).join(' ') || 'CGRAE';
-        const zone = this.sigZones().get(i);
-        const encodedZone = zone
+        const zones = this.getRecipientZones(i);
+        const encodedZone = zones[0]
           ? {
-              ...zone,
-              y_ratio: (Math.max(1, zone.page_number || 1) - 1) + zone.y_ratio,
+              ...zones[0],
+              y_ratio: (Math.max(1, zones[0].page_number || 1) - 1) + zones[0].y_ratio,
             }
           : undefined;
+        const encodedZones = zones.map((zone) => ({
+          ...zone,
+          y_ratio: (Math.max(1, zone.page_number || 1) - 1) + zone.y_ratio,
+        }));
 
         return {
           first_name: (raw.first_name || '').trim() || fallbackFirst,
@@ -595,6 +608,7 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
           role: raw.role || 'SIGNATORY',
           signing_order: Number(raw.signing_order) > 0 ? raw.signing_order : (i + 1),
           signature_zone: encodedZone,
+          signature_zones: encodedZones,
         };
       })
       .filter((r): r is NonNullable<typeof r> => !!r);
@@ -760,6 +774,87 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
       normalized.set(recipientIdx, this.clampDocIndex(docIndex));
     }
     this.zoneDocMap.set(normalized);
+
+    const selectedDocIds = new Set(this.selectedDocs());
+
+    const normalizedPages = new Map<string, number>();
+    for (const [key, page] of this.zonePageMap().entries()) {
+      const parsed = this.parseZoneKey(key);
+      if (!parsed) continue;
+      if (!selectedDocIds.has(parsed.docId)) continue;
+      normalizedPages.set(key, Math.max(1, Math.floor(Number(page) || 1)));
+    }
+    this.zonePageMap.set(normalizedPages);
+
+    const normalizedZones = new Map<string, { x_ratio: number; y_ratio: number; doc_id: number; page_number?: number }>();
+    for (const [key, zone] of this.sigZones().entries()) {
+      const parsed = this.parseZoneKey(key);
+      if (!parsed) continue;
+      if (!selectedDocIds.has(parsed.docId)) continue;
+      normalizedZones.set(key, zone);
+    }
+    this.sigZones.set(normalizedZones);
+  }
+
+  private zoneKey(recipientIdx: number, docId: number): string {
+    return `${recipientIdx}:${docId}`;
+  }
+
+  private parseZoneKey(key: string): { recipientIdx: number; docId: number } | null {
+    const [recipientRaw, docRaw] = key.split(':');
+    const recipientIdx = Number(recipientRaw);
+    const docId = Number(docRaw);
+    if (!Number.isFinite(recipientIdx) || !Number.isFinite(docId)) return null;
+    return { recipientIdx, docId };
+  }
+
+  private getRecipientSelectedDocId(recipientIdx: number): number | null {
+    const docIndex = this.getRecipientDocIndex(recipientIdx);
+    const docId = this.selectedDocs()[docIndex];
+    return Number.isFinite(Number(docId)) ? Number(docId) : null;
+  }
+
+  private getZoneForCurrentDoc(recipientIdx: number): { x_ratio: number; y_ratio: number; doc_id: number; page_number?: number } | null {
+    const docId = this.getRecipientSelectedDocId(recipientIdx);
+    if (!docId) return null;
+    return this.sigZones().get(this.zoneKey(recipientIdx, docId)) || null;
+  }
+
+  private getRecipientZones(recipientIdx: number): Array<{ x_ratio: number; y_ratio: number; doc_id: number; page_number?: number }> {
+    const zones: Array<{ x_ratio: number; y_ratio: number; doc_id: number; page_number?: number }> = [];
+    for (const [key, zone] of this.sigZones().entries()) {
+      const parsed = this.parseZoneKey(key);
+      if (!parsed || parsed.recipientIdx !== recipientIdx) continue;
+      zones.push(zone);
+    }
+    return zones;
+  }
+
+  private reindexRecipientZoneMapsAfterRecipientRemoval(removedIdx: number): void {
+    const reindexedDocMap = new Map<number, number>();
+    for (const [recipientIdx, docIndex] of this.zoneDocMap().entries()) {
+      if (recipientIdx === removedIdx) continue;
+      reindexedDocMap.set(recipientIdx > removedIdx ? recipientIdx - 1 : recipientIdx, docIndex);
+    }
+    this.zoneDocMap.set(reindexedDocMap);
+
+    const reindexedPages = new Map<string, number>();
+    for (const [key, page] of this.zonePageMap().entries()) {
+      const parsed = this.parseZoneKey(key);
+      if (!parsed || parsed.recipientIdx === removedIdx) continue;
+      const targetRecipientIdx = parsed.recipientIdx > removedIdx ? parsed.recipientIdx - 1 : parsed.recipientIdx;
+      reindexedPages.set(this.zoneKey(targetRecipientIdx, parsed.docId), page);
+    }
+    this.zonePageMap.set(reindexedPages);
+
+    const reindexedZones = new Map<string, { x_ratio: number; y_ratio: number; doc_id: number; page_number?: number }>();
+    for (const [key, zone] of this.sigZones().entries()) {
+      const parsed = this.parseZoneKey(key);
+      if (!parsed || parsed.recipientIdx === removedIdx) continue;
+      const targetRecipientIdx = parsed.recipientIdx > removedIdx ? parsed.recipientIdx - 1 : parsed.recipientIdx;
+      reindexedZones.set(this.zoneKey(targetRecipientIdx, parsed.docId), zone);
+    }
+    this.sigZones.set(reindexedZones);
   }
 
   private isZoneIframePreviewByDoc(doc: Document | null): boolean {

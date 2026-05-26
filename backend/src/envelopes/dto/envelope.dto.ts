@@ -32,6 +32,15 @@ export class RecipientDto {
   @ApiProperty({ required: false, description: 'Zone de signature prédéfinie (x_ratio, y_ratio entre 0 et 1, doc_id optionnel)' })
   @IsOptional()
   signature_zone?: { x_ratio: number; y_ratio: number; doc_id?: number };
+
+  @ApiProperty({
+    required: false,
+    type: [Object],
+    description: 'Zones de signature prédéfinies par document',
+    example: [{ doc_id: 10, x_ratio: 0.2, y_ratio: 1.85 }],
+  })
+  @IsOptional()
+  signature_zones?: Array<{ x_ratio: number; y_ratio: number; doc_id: number }>;
 }
 
 export class CreateEnvelopeDto {

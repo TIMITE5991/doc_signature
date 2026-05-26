@@ -93,6 +93,25 @@ import { Envelope, AuditLog, Recipient } from '../../../core/models';
             </div>
           </div>
 
+          <div class="card mt-2">
+            <h3 class="section-title">Pièces jointes ({{ envelope()!.attachments?.length || 0 }})</h3>
+            <div *ngFor="let doc of envelope()!.attachments" class="doc-item">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+                <div>
+                  📎 <strong>{{ displayName(doc.original_name) }}</strong>
+                  <span style="color:var(--text-muted);font-size:12px"> – {{ formatSize(doc.size) }}</span>
+                </div>
+                <a [href]="getDocViewUrl(doc.id_document)" target="_blank" rel="noopener"
+                   class="btn btn-outline btn-sm" style="white-space:nowrap;flex-shrink:0">
+                  👁 Visualiser
+                </a>
+              </div>
+            </div>
+            <div class="empty-state" style="padding:16px" *ngIf="!envelope()!.attachments?.length">
+              Aucune pièce jointe
+            </div>
+          </div>
+
           <div class="card mt-2" *ngIf="canSend() && envelope()!.status === 'REVISION'">
             <h3 class="section-title">Corriger le document</h3>
             <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">
@@ -135,17 +154,17 @@ import { Envelope, AuditLog, Recipient } from '../../../core/models';
             </div>
 
             <h4 style="font-size:13px;font-weight:700;margin:16px 0 8px;color:var(--primary)" *ngIf="correctionFiles().length && signatoryRecipientsForCorrection().length">
-              📍 Zones prédéfinies (signature + cachet)
+              📍 Zones de signature prédéfinies
             </h4>
             <p style="font-size:12px;color:var(--text-muted);margin-bottom:10px" *ngIf="correctionFiles().length && signatoryRecipientsForCorrection().length">
-              Définissez l'emplacement souhaité par destinataire. Le cachet utilisera cette zone par défaut lors de la signature.
+              Cliquez sur l'aperçu du document pour fixer l'emplacement exact de la signature de chaque signataire. Si non défini, le signataire positionnera lui-même sa signature.
             </p>
             <div *ngIf="correctionFiles().length && signatoryRecipientsForCorrection().length" style="display:grid;gap:10px;margin-top:8px">
               <div *ngFor="let r of signatoryRecipientsForCorrection()" style="border:1px solid var(--border);border-radius:8px;padding:10px">
                 <div style="font-size:12px;font-weight:700;margin-bottom:8px">{{ r.first_name }} {{ r.last_name }} ({{ r.email }})</div>
                 <div style="display:grid;grid-template-columns:1fr 90px;gap:8px;align-items:end">
                   <div>
-                    <label style="font-size:12px">Document corrigé</label>
+                    <label style="font-size:12px">Document cible</label>
                     <select [value]="getCorrectionZoneDocIndex(r.id_recipient)" (change)="setCorrectionZoneDocIndex(r.id_recipient, +$any($event.target).value)">
                       <option *ngFor="let file of correctionFiles(); let fi = index" [value]="fi">{{ file.name }}</option>
                     </select>
@@ -161,15 +180,15 @@ import { Envelope, AuditLog, Recipient } from '../../../core/models';
                   <button type="button" class="btn btn-outline btn-sm" (click)="nextCorrectionPreviewPage(r.id_recipient)" [disabled]="getCorrectionZonePage(r.id_recipient) >= correctionPdfTotalPages(r.id_recipient)">›</button>
                 </div>
                 <div style="margin-top:8px">
-                  <label style="font-size:12px">Position X: {{ correctionZonePercentX(r.id_recipient) }}%</label>
+                  <label style="font-size:12px">Position X précise: {{ correctionZonePercentX(r.id_recipient) }}%</label>
                   <input type="range" min="0" max="100" [value]="correctionZonePercentX(r.id_recipient)" (input)="setCorrectionZoneX(r.id_recipient, $any($event.target).value)" />
                 </div>
                 <div style="margin-top:4px">
-                  <label style="font-size:12px">Position Y: {{ correctionZonePercentY(r.id_recipient) }}%</label>
+                  <label style="font-size:12px">Position Y précise: {{ correctionZonePercentY(r.id_recipient) }}%</label>
                   <input type="range" min="0" max="100" [value]="correctionZonePercentY(r.id_recipient)" (input)="setCorrectionZoneY(r.id_recipient, $any($event.target).value)" />
                 </div>
                 <div class="corr-preview-wrap" *ngIf="getCorrectionPreviewType(r.id_recipient) !== 'none'">
-                  <div class="corr-preview-hint">Cliquez dans l'aperçu pour poser la zone.</div>
+                  <div class="corr-preview-hint">📍 Cliquez sur le document pour placer la zone</div>
                   <div class="corr-preview-toolbar">
                     <button type="button" class="btn btn-outline btn-sm" (click)="decreaseCorrectionPreviewZoom()">−</button>
                     <span>Zoom aperçu: {{ correctionPreviewZoom() }}%</span>
@@ -371,7 +390,8 @@ export class EnvelopeDetailComponent implements OnInit, OnDestroy {
   auditLogs    = signal<AuditLog[]>([]);
   correctionFiles = signal<File[]>([]);
   correctionAttachmentFiles = signal<File[]>([]);
-  correctionZones = signal<Map<number, { doc_index: number; x_ratio: number; y_ratio: number; page_number: number }>>(new Map());
+  correctionZoneDocSelection = signal<Map<number, number>>(new Map());
+  correctionZones = signal<Map<string, { x_ratio: number; y_ratio: number; page_number: number }>>(new Map());
   correctionPreviewZoom = signal(100);
   correctionPdfPageCounts = signal<Map<string, number>>(new Map());
   private correctionPreviewObjectUrlCache = new Map<string, string>();
@@ -451,6 +471,7 @@ export class EnvelopeDetailComponent implements OnInit, OnDestroy {
     this.clearCorrectionPreviewCache();
     this.correctionFiles.set([]);
     this.correctionAttachmentFiles.set([]);
+    this.correctionZoneDocSelection.set(new Map());
     this.correctionZones.set(new Map());
   }
 
@@ -478,7 +499,7 @@ export class EnvelopeDetailComponent implements OnInit, OnDestroy {
   }
 
   getCorrectionZoneDocIndex(recipientId: number): number {
-    return this.getCorrectionZone(recipientId).doc_index;
+    return this.getCorrectionDocIndex(recipientId);
   }
 
   getCorrectionZonePage(recipientId: number): number {
@@ -496,7 +517,9 @@ export class EnvelopeDetailComponent implements OnInit, OnDestroy {
   setCorrectionZoneDocIndex(recipientId: number, docIndex: number): void {
     const max = Math.max(0, this.correctionFiles().length - 1);
     const safe = Math.min(Math.max(docIndex, 0), max);
-    this.updateCorrectionZone(recipientId, { doc_index: safe });
+    const next = new Map(this.correctionZoneDocSelection());
+    next.set(recipientId, safe);
+    this.correctionZoneDocSelection.set(next);
   }
 
   setCorrectionZonePage(recipientId: number, pageValue: string): void {
@@ -637,6 +660,7 @@ export class EnvelopeDetailComponent implements OnInit, OnDestroy {
                 this.successMsg.set('Corrections enregistrées et parapheur renvoyé avec succès.');
                 this.correctionFiles.set([]);
                 this.correctionAttachmentFiles.set([]);
+                this.correctionZoneDocSelection.set(new Map());
                 this.correctionZones.set(new Map());
                 this.correctionLoading.set(false);
               },
@@ -666,31 +690,44 @@ export class EnvelopeDetailComponent implements OnInit, OnDestroy {
     uploadDocuments(0, []);
   }
 
-  private getCorrectionZone(recipientId: number): { doc_index: number; x_ratio: number; y_ratio: number; page_number: number } {
-    const existing = this.correctionZones().get(recipientId);
+  private getCorrectionZone(recipientId: number, docIndex?: number): { x_ratio: number; y_ratio: number; page_number: number } {
+    const effectiveDocIndex = this.getCorrectionDocIndex(recipientId, docIndex);
+    const key = this.correctionZoneKey(recipientId, effectiveDocIndex);
+    const existing = this.correctionZones().get(key);
     if (existing) return existing;
-    return { doc_index: 0, x_ratio: 0.18, y_ratio: 0.88, page_number: 1 };
+    return { x_ratio: 0.18, y_ratio: 0.88, page_number: 1 };
   }
 
   private updateCorrectionZone(
     recipientId: number,
-    patch: Partial<{ doc_index: number; x_ratio: number; y_ratio: number; page_number: number }>,
+    patch: Partial<{ x_ratio: number; y_ratio: number; page_number: number }>,
   ): void {
     const next = new Map(this.correctionZones());
-    const current = this.getCorrectionZone(recipientId);
-    next.set(recipientId, { ...current, ...patch });
+    const docIndex = this.getCorrectionDocIndex(recipientId);
+    const key = this.correctionZoneKey(recipientId, docIndex);
+    const current = this.getCorrectionZone(recipientId, docIndex);
+    next.set(key, { ...current, ...patch });
     this.correctionZones.set(next);
   }
 
   private normalizeCorrectionZones(): void {
     const max = Math.max(0, this.correctionFiles().length - 1);
-    const next = new Map<number, { doc_index: number; x_ratio: number; y_ratio: number; page_number: number }>();
-    for (const [recipientId, zone] of this.correctionZones().entries()) {
-      next.set(recipientId, {
+    const nextSelection = new Map<number, number>();
+    for (const [recipientId, docIndex] of this.correctionZoneDocSelection().entries()) {
+      nextSelection.set(recipientId, Math.min(Math.max(docIndex, 0), max));
+    }
+    this.correctionZoneDocSelection.set(nextSelection);
+
+    const next = new Map<string, { x_ratio: number; y_ratio: number; page_number: number }>();
+    for (const [key, zone] of this.correctionZones().entries()) {
+      const parsed = this.parseCorrectionZoneKey(key);
+      if (!parsed) continue;
+      const safeDocIndex = Math.min(Math.max(parsed.docIndex, 0), max);
+      next.set(this.correctionZoneKey(parsed.recipientId, safeDocIndex), {
         ...zone,
-        doc_index: Math.min(Math.max(zone.doc_index, 0), max),
       });
     }
+
     this.correctionZones.set(next);
     this.clearCorrectionPreviewCache();
   }
@@ -699,11 +736,13 @@ export class EnvelopeDetailComponent implements OnInit, OnDestroy {
     const signatoryIds = new Set(this.signatoryRecipientsForCorrection().map((r) => r.id_recipient));
     const payload: Array<{ id_recipient: number; doc_index: number; x_ratio: number; y_ratio: number; page_number: number }> = [];
 
-    for (const [id_recipient, zone] of this.correctionZones().entries()) {
-      if (!signatoryIds.has(id_recipient)) continue;
+    for (const [key, zone] of this.correctionZones().entries()) {
+      const parsed = this.parseCorrectionZoneKey(key);
+      if (!parsed) continue;
+      if (!signatoryIds.has(parsed.recipientId)) continue;
       payload.push({
-        id_recipient,
-        doc_index: zone.doc_index,
+        id_recipient: parsed.recipientId,
+        doc_index: parsed.docIndex,
         x_ratio: zone.x_ratio,
         y_ratio: zone.y_ratio,
         page_number: zone.page_number,
@@ -717,9 +756,26 @@ export class EnvelopeDetailComponent implements OnInit, OnDestroy {
     const files = this.correctionFiles();
     if (!files.length) return null;
 
-    const zone = this.getCorrectionZone(recipientId);
-    const index = Math.min(Math.max(zone.doc_index, 0), files.length - 1);
+    const index = this.getCorrectionDocIndex(recipientId);
     return files[index] || null;
+  }
+
+  private getCorrectionDocIndex(recipientId: number, explicitDocIndex?: number): number {
+    const max = Math.max(0, this.correctionFiles().length - 1);
+    const source = explicitDocIndex ?? this.correctionZoneDocSelection().get(recipientId) ?? 0;
+    return Math.min(Math.max(source, 0), max);
+  }
+
+  private correctionZoneKey(recipientId: number, docIndex: number): string {
+    return `${recipientId}:${docIndex}`;
+  }
+
+  private parseCorrectionZoneKey(key: string): { recipientId: number; docIndex: number } | null {
+    const [recipientRaw, docRaw] = key.split(':');
+    const recipientId = Number(recipientRaw);
+    const docIndex = Number(docRaw);
+    if (!Number.isFinite(recipientId) || !Number.isFinite(docIndex)) return null;
+    return { recipientId, docIndex };
   }
 
   private getCorrectionFileKey(file: File): string {
@@ -772,12 +828,14 @@ export class EnvelopeDetailComponent implements OnInit, OnDestroy {
 
         const zones = new Map(this.correctionZones());
         let hasChange = false;
-        for (const [rid, zone] of zones.entries()) {
-          const ridFile = this.getCorrectionPreviewFile(rid);
+        for (const [zoneKey, zone] of zones.entries()) {
+          const parsed = this.parseCorrectionZoneKey(zoneKey);
+          if (!parsed) continue;
+          const ridFile = this.correctionFiles()[Math.min(Math.max(parsed.docIndex, 0), this.correctionFiles().length - 1)] || null;
           if (!ridFile) continue;
           if (this.getCorrectionFileKey(ridFile) !== key) continue;
           if (zone.page_number > pageCount) {
-            zones.set(rid, { ...zone, page_number: pageCount });
+            zones.set(zoneKey, { ...zone, page_number: pageCount });
             hasChange = true;
           }
         }

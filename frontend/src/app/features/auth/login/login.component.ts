@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy } from '@angular/core';
+import { Component, ChangeDetectionStrategy, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
@@ -90,6 +90,7 @@ export class LoginComponent {
     private api: ApiService,
     private auth: AuthService,
     private router: Router,
+    private cdr: ChangeDetectorRef,
   ) {}
 
   submit(): void {
@@ -100,12 +101,15 @@ export class LoginComponent {
 
     this.api.login(email!, password!).subscribe({
       next: (res) => {
+        this.loading = false;
         this.auth.setAuth(res.access_token, res.user);
+        this.cdr.markForCheck();
         this.router.navigate(['/dashboard']);
       },
       error: (err) => {
         this.error   = err.message;
         this.loading = false;
+        this.cdr.markForCheck();
       },
     });
   }

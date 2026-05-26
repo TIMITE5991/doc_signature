@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy } from '@angular/core';
+import { Component, ChangeDetectionStrategy, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
@@ -96,7 +96,12 @@ export class RegisterComponent {
   error   = '';
   success = false;
 
-  constructor(private fb: FormBuilder, private api: ApiService, private router: Router) {}
+  constructor(
+    private fb: FormBuilder,
+    private api: ApiService,
+    private router: Router,
+    private cdr: ChangeDetectorRef,
+  ) {}
 
   submit(): void {
     if (this.form.invalid) return;
@@ -104,12 +109,17 @@ export class RegisterComponent {
     this.error   = '';
 
     this.api.register(this.form.value).pipe(timeout(15000)).subscribe({
-      next: () => { this.success = true; this.loading = false; },
+      next: () => {
+        this.success = true;
+        this.loading = false;
+        this.cdr.markForCheck();
+      },
       error: (err) => {
         this.error = err?.name === 'TimeoutError'
           ? 'Le serveur met trop de temps à répondre. Vérifiez que le backend est bien démarré.'
           : err.message;
         this.loading = false;
+        this.cdr.markForCheck();
       },
     });
   }

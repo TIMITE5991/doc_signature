@@ -16,12 +16,36 @@ async function seed() {
     },
   });
 
-  const hash = await bcrypt.hash('Admin1234!', 10);
+  const upsertUser = async (payload: {
+    email: string;
+    password: string;
+    first_name: string;
+    last_name: string;
+    role: string;
+    department: string;
+    phone: string;
+    is_active: boolean;
+    mfa_enabled: boolean;
+  }) => {
+    await db('t_users')
+      .insert(payload)
+      .onConflict('email')
+      .merge({
+        password: payload.password,
+        first_name: payload.first_name,
+        last_name: payload.last_name,
+        role: payload.role,
+        department: payload.department,
+        phone: payload.phone,
+        is_active: payload.is_active,
+        mfa_enabled: payload.mfa_enabled,
+      });
+  };
 
   // Super Admin
-  await db('t_users').insert({
+  await upsertUser({
     email: 'admin@cgrae.ci',
-    password: hash,
+    password: await bcrypt.hash('Admin1234!', 10),
     first_name: 'Super',
     last_name: 'Admin',
     role: 'SUPER_ADMIN',
@@ -29,10 +53,10 @@ async function seed() {
     phone: '+225 0000000000',
     is_active: true,
     mfa_enabled: false,
-  }).onConflict('email').ignore();
+  });
 
   // Admin
-  await db('t_users').insert({
+  await upsertUser({
     email: 'it.admin@cgrae.ci',
     password: await bcrypt.hash('Admin1234!', 10),
     first_name: 'Responsable',
@@ -42,10 +66,10 @@ async function seed() {
     phone: '+225 0101010101',
     is_active: true,
     mfa_enabled: false,
-  }).onConflict('email').ignore();
+  });
 
   // Signatory
-  await db('t_users').insert({
+  await upsertUser({
     email: 'dg@cgrae.ci',
     password: await bcrypt.hash('User1234!', 10),
     first_name: 'Directeur',
@@ -55,10 +79,10 @@ async function seed() {
     phone: '+225 0202020202',
     is_active: true,
     mfa_enabled: false,
-  }).onConflict('email').ignore();
+  });
 
   // Approver
-  await db('t_users').insert({
+  await upsertUser({
     email: 'juridique@cgrae.ci',
     password: await bcrypt.hash('User1234!', 10),
     first_name: 'Responsable',
@@ -68,7 +92,7 @@ async function seed() {
     phone: '+225 0303030303',
     is_active: true,
     mfa_enabled: false,
-  }).onConflict('email').ignore();
+  });
 
   console.log('✅ Seed data inserted successfully');
   await db.destroy();

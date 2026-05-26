@@ -52,11 +52,29 @@
       <!-- Documents -->
       <div class="card">
         <h3 class="section-title">Documents à joindre</h3>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+          <label class="btn btn-outline btn-sm" style="cursor:pointer;margin:0">
+            📎 Importer un ou plusieurs documents
+            <input type="file" multiple style="display:none" (change)="onDocumentFilesSelected($event)" />
+          </label>
+          <span style="font-size:12px;color:var(--text-muted)" *ngIf="uploadingDocuments()">
+            Upload en cours...
+          </span>
+        </div>
+        <div class="error-msg mt-1" *ngIf="documentUploadError()">
+          {{ documentUploadError() }}
+        </div>
+        <div class="list-toolbar" *ngIf="!loadingDocs() && myDocs().length > 0">
+          <span>Lignes par page</span>
+          <select [value]="docsPerPage()" (change)="setDocsPerPage($any($event.target).value)">
+            <option *ngFor="let size of pageSizeOptions" [value]="size">{{ size }}</option>
+          </select>
+        </div>
         <div class="loading-center" *ngIf="loadingDocs()"><div class="spinner" style="width:24px;height:24px;border-width:2px"></div></div>
         <div class="empty-state" style="padding:20px" *ngIf="!loadingDocs() && myDocs().length === 0">
           <p>Aucun document disponible. <a [routerLink]="['/documents']">Ajouter des documents →</a></p>
         </div>
-        <div *ngFor="let doc of myDocs()" class="doc-item">
+        <div *ngFor="let doc of pagedDocuments()" class="doc-item">
           <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
             <input
               type="checkbox"
@@ -69,6 +87,11 @@
               <span style="color:var(--text-muted)"> – {{ formatSize(doc.size) }}</span>
             </span>
           </label>
+        </div>
+        <div class="list-pager" *ngIf="!loadingDocs() && myDocs().length > docsPerPage()">
+          <button type="button" class="btn btn-outline btn-sm" (click)="prevDocumentsPage()" [disabled]="documentsPage() <= 1">Précédent</button>
+          <span>Page {{ documentsPage() }} / {{ documentsTotalPages() }}</span>
+          <button type="button" class="btn btn-outline btn-sm" (click)="nextDocumentsPage()" [disabled]="documentsPage() >= documentsTotalPages()">Suivant</button>
         </div>
         <div class="error-msg mt-1" *ngIf="submitted() && selectedDocs().length === 0">
           Sélectionnez au moins un document
@@ -92,11 +115,17 @@
         <div class="error-msg mt-1" *ngIf="attachmentUploadError()">
           {{ attachmentUploadError() }}
         </div>
+        <div class="list-toolbar" *ngIf="!loadingDocs() && myDocs().length > 0">
+          <span>Lignes par page</span>
+          <select [value]="docsPerPage()" (change)="setDocsPerPage($any($event.target).value)">
+            <option *ngFor="let size of pageSizeOptions" [value]="size">{{ size }}</option>
+          </select>
+        </div>
         <div class="loading-center" *ngIf="loadingDocs()"><div class="spinner" style="width:24px;height:24px;border-width:2px"></div></div>
         <div class="empty-state" style="padding:20px" *ngIf="!loadingDocs() && myDocs().length === 0">
           <p>Aucun document disponible. <a [routerLink]="['/documents']">Ajouter des documents →</a></p>
         </div>
-        <div *ngFor="let doc of myDocs()" class="doc-item">
+        <div *ngFor="let doc of pagedAttachments()" class="doc-item">
           <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
             <input
               type="checkbox"
@@ -109,6 +138,11 @@
               <span style="color:var(--text-muted)"> – {{ formatSize(doc.size) }}</span>
             </span>
           </label>
+        </div>
+        <div class="list-pager" *ngIf="!loadingDocs() && myDocs().length > docsPerPage()">
+          <button type="button" class="btn btn-outline btn-sm" (click)="prevAttachmentsPage()" [disabled]="attachmentsPage() <= 1">Précédent</button>
+          <span>Page {{ attachmentsPage() }} / {{ attachmentsTotalPages() }}</span>
+          <button type="button" class="btn btn-outline btn-sm" (click)="nextAttachmentsPage()" [disabled]="attachmentsPage() >= attachmentsTotalPages()">Suivant</button>
         </div>
       </div>
     </div>

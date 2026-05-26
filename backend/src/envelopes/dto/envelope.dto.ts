@@ -86,6 +86,32 @@ export class UpdateEnvelopeDocumentsDto {
   @IsArray()
   @IsNumber({}, { each: true })
   document_ids: number[];
+
+  @ApiProperty({
+    type: [Number],
+    required: false,
+    description: 'IDs des pièces jointes (non signées) à associer à l\'enveloppe',
+  })
+  @IsArray()
+  @IsNumber({}, { each: true })
+  @IsOptional()
+  attachment_ids?: number[];
+
+  @ApiProperty({
+    required: false,
+    type: [Object],
+    description: 'Zones prédéfinies pendant correction (doc_index relatif aux documents corrigés uploadés)',
+    example: [{ id_recipient: 12, doc_index: 0, x_ratio: 0.2, y_ratio: 0.85, page_number: 1 }],
+  })
+  @IsArray()
+  @IsOptional()
+  recipient_zones?: Array<{
+    id_recipient: number;
+    doc_index: number;
+    x_ratio: number;
+    y_ratio: number;
+    page_number?: number;
+  }>;
 }
 
 export class RejectEnvelopeDto {

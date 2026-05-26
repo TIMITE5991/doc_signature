@@ -38,7 +38,7 @@ import { Notification } from '../../core/models';
           <span class="notif-date">{{ n.created_at | date:'dd/MM/yyyy HH:mm' }}</span>
           <a *ngIf="n.id_envelope" [routerLink]="['/envelopes', n.id_envelope]"
              class="notif-link" (click)="markRead(n); $event.stopPropagation()">
-            Voir l'enveloppe →
+            Voir parapheur →
           </a>
         </div>
         <hr *ngIf="!last" class="notif-divider"/>

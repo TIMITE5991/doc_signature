@@ -19,12 +19,18 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
   loadingDocs  = signal(true);
   saving       = signal(false);
   error        = signal('');
+  documentUploadError = signal('');
   attachmentUploadError = signal('');
   submitted    = signal(false);
   myDocs       = signal<Document[]>([]);
   selectedDocs = signal<number[]>([]);
   selectedAttachments = signal<number[]>([]);
+  uploadingDocuments = signal(false);
   uploadingAttachments = signal(false);
+  documentsPage = signal(1);
+  attachmentsPage = signal(1);
+  readonly pageSizeOptions = [8, 15, 30];
+  docsPerPage = signal(8);
   sendOnCreate = false;
 
   zoneRecipientIdx = signal(0);
@@ -82,7 +88,8 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     this.api.getDocuments().subscribe({
       next: (docs) => {
-        this.myDocs.set(docs);
+        this.myDocs.set(this.mergeDocumentLists(this.myDocs(), docs));
+        this.ensurePaginationBounds();
         this.loadingDocs.set(false);
         setTimeout(() => this.refreshZonePreview(), 0);
       },
@@ -158,11 +165,49 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
     }
   }
 
+  onDocumentFilesSelected(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const files = Array.from(input.files || []);
+    if (!files.length) return;
+
+    this.documentsPage.set(1);
+    this.uploadingDocuments.set(true);
+    this.documentUploadError.set('');
+
+    const uploadNext = (index: number) => {
+      if (index >= files.length) {
+        this.uploadingDocuments.set(false);
+        input.value = '';
+        this.normalizeZoneDocMap();
+        setTimeout(() => this.refreshZonePreview(), 0);
+        return;
+      }
+
+      this.api.uploadDocument(files[index]).subscribe({
+        next: (doc) => {
+          this.myDocs.update((docs) => [doc, ...docs]);
+          this.ensurePaginationBounds();
+          this.selectedDocs.update((ids) => (ids.includes(doc.id_document) ? ids : [...ids, doc.id_document]));
+          this.selectedAttachments.update((ids) => ids.filter((id) => id !== doc.id_document));
+          uploadNext(index + 1);
+        },
+        error: (err) => {
+          this.documentUploadError.set(this.extractUploadErrorMessage(err));
+          this.uploadingDocuments.set(false);
+          input.value = '';
+        },
+      });
+    };
+
+    uploadNext(0);
+  }
+
   onAttachmentFilesSelected(event: Event): void {
     const input = event.target as HTMLInputElement;
     const files = Array.from(input.files || []);
     if (!files.length) return;
 
+    this.attachmentsPage.set(1);
     this.uploadingAttachments.set(true);
     this.attachmentUploadError.set('');
 
@@ -176,6 +221,7 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
       this.api.uploadDocument(files[index]).subscribe({
         next: (doc) => {
           this.myDocs.update((docs) => [doc, ...docs]);
+          this.ensurePaginationBounds();
           this.selectedAttachments.update((ids) => (ids.includes(doc.id_document) ? ids : [...ids, doc.id_document]));
           this.selectedDocs.update((ids) => ids.filter((id) => id !== doc.id_document));
           uploadNext(index + 1);
@@ -444,6 +490,48 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   }
 
+  pagedDocuments(): Document[] {
+    return this.getPagedDocs(this.documentsPage());
+  }
+
+  pagedAttachments(): Document[] {
+    return this.getPagedDocs(this.attachmentsPage());
+  }
+
+  documentsTotalPages(): number {
+    return this.getTotalPages();
+  }
+
+  attachmentsTotalPages(): number {
+    return this.getTotalPages();
+  }
+
+  prevDocumentsPage(): void {
+    this.documentsPage.set(Math.max(1, this.documentsPage() - 1));
+  }
+
+  nextDocumentsPage(): void {
+    this.documentsPage.set(Math.min(this.documentsTotalPages(), this.documentsPage() + 1));
+  }
+
+  prevAttachmentsPage(): void {
+    this.attachmentsPage.set(Math.max(1, this.attachmentsPage() - 1));
+  }
+
+  nextAttachmentsPage(): void {
+    this.attachmentsPage.set(Math.min(this.attachmentsTotalPages(), this.attachmentsPage() + 1));
+  }
+
+  setDocsPerPage(value: string): void {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return;
+    const nextSize = this.pageSizeOptions.includes(parsed) ? parsed : this.pageSizeOptions[0];
+    this.docsPerPage.set(nextSize);
+    this.documentsPage.set(1);
+    this.attachmentsPage.set(1);
+    this.ensurePaginationBounds();
+  }
+
   private hasStrictSequentialOrderIssue(): boolean {
     if (this.form.value.circuit_type !== 'SEQUENTIAL') return false;
     const orders = this.recipientsArray.controls.map(group => Number(group.get('signing_order')?.value));
@@ -527,7 +615,39 @@ export class EnvelopeFormComponent implements OnInit, OnDestroy {
       return 'Fichier trop volumineux. Taille maximale autorisée : 50 Mo.';
     }
 
-    return rawMessage || 'Échec de l\'upload des pièces jointes.';
+    return rawMessage || 'Échec de l\'upload du fichier.';
+  }
+
+  private mergeDocumentLists(localDocs: Document[], serverDocs: Document[]): Document[] {
+    const byId = new Map<number, Document>();
+
+    // Keep locally uploaded docs first to avoid visual disappearance on late initial fetch.
+    for (const doc of localDocs) byId.set(doc.id_document, doc);
+    for (const doc of serverDocs) if (!byId.has(doc.id_document)) byId.set(doc.id_document, doc);
+
+    return Array.from(byId.values()).sort((a, b) => {
+      const aTime = new Date(a.created_at || 0).getTime();
+      const bTime = new Date(b.created_at || 0).getTime();
+      if (Number.isFinite(aTime) && Number.isFinite(bTime) && aTime !== bTime) return bTime - aTime;
+      return (b.id_document || 0) - (a.id_document || 0);
+    });
+  }
+
+  private getTotalPages(): number {
+    return Math.max(1, Math.ceil(this.myDocs().length / this.docsPerPage()));
+  }
+
+  private getPagedDocs(page: number): Document[] {
+    const safePage = Math.min(Math.max(page, 1), this.getTotalPages());
+    const pageSize = this.docsPerPage();
+    const start = (safePage - 1) * pageSize;
+    return this.myDocs().slice(start, start + pageSize);
+  }
+
+  private ensurePaginationBounds(): void {
+    const total = this.getTotalPages();
+    if (this.documentsPage() > total) this.documentsPage.set(total);
+    if (this.attachmentsPage() > total) this.attachmentsPage.set(total);
   }
 
 

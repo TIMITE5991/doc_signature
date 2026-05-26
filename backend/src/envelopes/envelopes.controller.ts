@@ -78,7 +78,13 @@ export class EnvelopesController {
     @Body() dto: UpdateEnvelopeDocumentsDto,
     @Request() req,
   ) {
-    return this.envelopesService.replaceDocuments(id, req.user.id_user, dto.document_ids);
+    return this.envelopesService.replaceDocuments(
+      id,
+      req.user.id_user,
+      dto.document_ids,
+      dto.attachment_ids,
+      dto.recipient_zones,
+    );
   }
 
   @Post(':id/forward')

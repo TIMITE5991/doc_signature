@@ -28,15 +28,11 @@ export class EnvelopesService {
   ) {}
 
   async findAll(userId: number, role: string) {
-    await this.expireOverdueEnvelopes();
-    await this.ensureEnvelopeAttachmentsTable();
-
     const query = this.db('t_envelopes as e')
       .join('t_users as u', 'e.created_by', 'u.id_user')
       .select(
         'e.*',
         this.db.raw("CONCAT(u.first_name, ' ', u.last_name) as creator_name"),
-        this.db.raw('(SELECT COUNT(*) FROM t_envelope_attachments ea WHERE ea.id_envelope = e.id_envelope) as attachment_count'),
       )
       .orderBy('e.created_at', 'desc');
 
@@ -47,10 +43,6 @@ export class EnvelopesService {
   }
 
   async findById(id: number) {
-    await this.expireOverdueEnvelopes();
-    await this.ensureEnvelopeDocumentHistoryTable();
-    await this.ensureEnvelopeAttachmentsTable();
-
     const [env] = await this.db('t_envelopes as e')
       .join('t_users as u', 'e.created_by', 'u.id_user')
       .where('e.id_envelope', id)
@@ -72,30 +64,10 @@ export class EnvelopesService {
       .where('ea.id_envelope', id)
       .select('d.*');
 
-    const previousDocuments = await this.db('t_envelope_document_history as h')
-      .join('t_documents as d', 'h.id_document', 'd.id_document')
-      .where('h.id_envelope', id)
-      .orderBy('h.revision_no', 'desc')
-      .orderBy('h.replaced_at', 'desc')
-      .select(
-        'd.*',
-        'h.revision_no',
-        'h.replaced_at',
-        'h.id_replaced_by as replaced_by',
-      );
-
-    return {
-      ...env,
-      recipients,
-      documents,
-      attachments,
-      previous_documents: previousDocuments,
-    };
+    return { ...env, recipients, documents, attachments };
   }
 
   async create(dto: CreateEnvelopeDto, userId: number) {
-    await this.ensureEnvelopeAttachmentsTable();
-
     // Validate that all @cgrae.ci recipients only
     for (const r of dto.recipients) {
       if (!r.email.endsWith('@cgrae.ci')) {
@@ -124,6 +96,7 @@ export class EnvelopesService {
         await trx('t_envelope_documents').insert({ id_envelope: envId, id_document: docId });
       }
 
+      // Link optional non-signed attachments
       for (const attachmentId of dto.attachment_ids || []) {
         await trx('t_envelope_attachments').insert({ id_envelope: envId, id_document: attachmentId });
       }
@@ -259,7 +232,7 @@ export class EnvelopesService {
 
     const [envelope] = await this.db('t_envelopes').where('id_envelope', recipient.id_envelope);
     if (!envelope) throw new NotFoundException('Enveloppe non trouvée');
-    await this.assertPublicEnvelopeAccessible(envelope, BadRequestException);
+    this.assertPublicEnvelopeAccessible(envelope, BadRequestException);
 
     let sigFile: string | undefined;
     if (signatureImage && signatureImage.startsWith('data:image/png;base64,')) {
@@ -291,16 +264,16 @@ export class EnvelopesService {
     let signedAttachment: { filename: string; path: string; contentType?: string } | undefined;
 
     if (sigFile && isSignatory) {
-      const envelopeDocuments = await this.db('t_envelope_documents')
+      // Zone prédéfinie par l'émetteur (prioritaire). Sinon, signer tous les documents de l'enveloppe.
+      const envelopeDocRows = await this.db('t_envelope_documents')
         .where('id_envelope', envelope.id_envelope)
-        .select('id_document') as Array<{ id_document: number }>;
+        .select('id_document');
+      const allEnvelopeDocIds = envelopeDocRows.map((row) => Number(row.id_document)).filter((id) => Number.isFinite(id));
+      const targetDocIds = recipient.sig_doc_id
+        ? [Number(recipient.sig_doc_id)]
+        : allEnvelopeDocIds;
 
-      const explicitTargetDocId = recipient.sig_doc_id || signaturePosition?.doc_id || null;
-      const targetDocIds = explicitTargetDocId
-        ? [explicitTargetDocId]
-        : envelopeDocuments.map((doc) => doc.id_document);
-
-      if (targetDocIds.length) {
+      if (targetDocIds.length > 0) {
         // Backward-compatible page decoding: y_ratio may encode page (page-1 + y).
         const rawPredefY = recipient.sig_y_ratio != null ? Number(recipient.sig_y_ratio) : NaN;
         const encodedPage = Number.isFinite(rawPredefY) && rawPredefY > 1 ? Math.floor(rawPredefY) + 1 : 1;
@@ -317,11 +290,12 @@ export class EnvelopesService {
 
         // Résoudre le chemin du cachet si demandé
         let resolvedStampPath: string | undefined;
-        let stampX = 0.50;
-        let stampY = 0.90;
+        let stampX = xRatio;
+        let stampY = yRatio;
         let stampPage = Math.max(1, Math.floor(Number(stampPosition?.page_number || signaturePage || 1)));
         if (useStamp) {
           if (stampImage && stampImage.startsWith('data:image/')) {
+            // Cachet fourni inline — sauvegarder comme cachet permanent de l'utilisateur
             const stampDir = path.resolve(process.env.UPLOAD_DEST || './uploads', 'stamps');
             if (!fs.existsSync(stampDir)) fs.mkdirSync(stampDir, { recursive: true });
             const isPng = stampImage.startsWith('data:image/png');
@@ -329,12 +303,14 @@ export class EnvelopesService {
             const stampFile = path.join(stampDir, `stamp_${recipient.id_recipient}_${Date.now()}${stampExt}`);
             fs.writeFileSync(stampFile, Buffer.from(stampImage.replace(/^data:image\/(png|jpeg|jpg);base64,/, ''), 'base64'));
             resolvedStampPath = stampFile;
+            // Sauvegarder aussi en tant que cachet permanent si l'utilisateur est connu
             if (recipient.id_user) {
               const permFile = path.join(stampDir, `stamp_${recipient.id_user}${stampExt}`);
               fs.copyFileSync(stampFile, permFile);
               await this.db('t_users').where('id_user', recipient.id_user).update({ stamp_path: permFile });
             }
           } else {
+            // Résoudre via id_user, sinon fallback via email puis lier id_user dans t_recipients
             let ownerId = recipient.id_user as number | null;
             let userRow: any;
             if (ownerId) {
@@ -358,11 +334,10 @@ export class EnvelopesService {
         }
 
         try {
-          const signedDocs: Array<{ original_name?: string; name?: string; path?: string; mime_type?: string }> = [];
-          for (const docId of targetDocIds) {
+          for (const targetDocId of targetDocIds) {
             const signedDoc = await this.applySignatureOnEnvelopeDocument(
               envelope.id_envelope,
-              docId,
+              targetDocId,
               sigFile,
               xRatio,
               yRatio,
@@ -374,32 +349,12 @@ export class EnvelopesService {
               stampPage,
             );
             if (signedDoc?.path && fs.existsSync(signedDoc.path)) {
-              signedDocs.push(signedDoc);
+              signedAttachment = {
+                filename: signedDoc.original_name || signedDoc.name || 'document-signe',
+                path: signedDoc.path,
+                contentType: signedDoc.mime_type || undefined,
+              };
             }
-          }
-
-          if (signedDocs.length === 1) {
-            const [signedDoc] = signedDocs;
-            signedAttachment = {
-              filename: signedDoc.original_name || signedDoc.name || 'document-signe',
-              path: signedDoc.path!,
-              contentType: signedDoc.mime_type || undefined,
-            };
-          } else if (signedDocs.length > 1) {
-            const zip = new JSZip();
-            for (const signedDoc of signedDocs) {
-              zip.file(signedDoc.original_name || signedDoc.name || 'document-signe', fs.readFileSync(signedDoc.path!));
-            }
-            const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
-            const signedDir = path.resolve(process.env.UPLOAD_DEST || './uploads', 'signed');
-            if (!fs.existsSync(signedDir)) fs.mkdirSync(signedDir, { recursive: true });
-            const zipPath = path.join(signedDir, `signed_docs_${envelope.id_envelope}_${Date.now()}.zip`);
-            fs.writeFileSync(zipPath, zipBuffer);
-            signedAttachment = {
-              filename: `documents-signes-${envelope.id_envelope}.zip`,
-              path: zipPath,
-              contentType: 'application/zip',
-            };
           }
         } catch (error) {
           console.error('Signature/cachet application failed', error);
@@ -687,7 +642,7 @@ export class EnvelopesService {
     const envelopeId = recipient.id_envelope;
     const [envelope] = await this.db('t_envelopes').where('id_envelope', envelopeId);
     if (!envelope) throw new NotFoundException('Enveloppe non trouvée');
-    await this.assertPublicEnvelopeAccessible(envelope);
+    this.assertPublicEnvelopeAccessible(envelope);
 
     await this.db('t_recipients').where('id_recipient', recipient.id_recipient).update({
       status: RecipientStatus.REJECTED,
@@ -724,17 +679,12 @@ export class EnvelopesService {
       throw new BadRequestException('Le délégué doit avoir un email @cgrae.ci');
     }
 
-    const emailLocalPart = (dto.delegate_email || '').split('@')[0] || 'delegue';
-    const nameParts = emailLocalPart.split(/[._-]+/).filter(Boolean);
-    const delegateFirstName = (dto.delegate_first_name || nameParts[0] || 'Délégué').trim();
-    const delegateLastName = (dto.delegate_last_name || nameParts.slice(1).join(' ') || 'CGRAE').trim();
-
     const [recipient] = await this.db('t_recipients').where('token', token);
     if (!recipient) throw new NotFoundException('Lien invalide');
 
     const [env] = await this.db('t_envelopes').where('id_envelope', recipient.id_envelope);
     if (!env) throw new NotFoundException('Enveloppe non trouvée');
-    await this.assertPublicEnvelopeAccessible(env);
+    this.assertPublicEnvelopeAccessible(env);
 
     const newToken = uuidv4();
     await this.db('t_recipients').where('id_recipient', recipient.id_recipient).update({
@@ -744,8 +694,8 @@ export class EnvelopesService {
     await this.db('t_recipients').insert({
       id_envelope: recipient.id_envelope,
       email: dto.delegate_email,
-      first_name: delegateFirstName,
-      last_name: delegateLastName,
+      first_name: dto.delegate_first_name,
+      last_name: dto.delegate_last_name,
       role: recipient.role,
       signing_order: recipient.signing_order,
       status: RecipientStatus.SENT,
@@ -756,7 +706,7 @@ export class EnvelopesService {
 
     this.emailService.sendSignatureRequest(
       dto.delegate_email,
-      `${delegateFirstName} ${delegateLastName}`,
+      `${dto.delegate_first_name} ${dto.delegate_last_name}`,
       env.title,
       `${sender.first_name} ${sender.last_name}`,
       newToken,
@@ -776,7 +726,7 @@ export class EnvelopesService {
 
     const [envelope] = await this.db('t_envelopes').where('id_envelope', recipient.id_envelope);
     if (!envelope) throw new NotFoundException('Enveloppe non trouvée');
-    await this.assertPublicEnvelopeAccessible(envelope);
+    this.assertPublicEnvelopeAccessible(envelope);
 
     await this.db('t_recipients').where('id_recipient', recipient.id_recipient).update({
       status: RecipientStatus.RETURNED,
@@ -816,11 +766,6 @@ export class EnvelopesService {
       throw new BadRequestException('Le destinataire doit avoir un email @cgrae.ci');
     }
 
-    const emailLocalPart = (dto.forward_email || '').split('@')[0] || 'destinataire';
-    const nameParts = emailLocalPart.split(/[._-]+/).filter(Boolean);
-    const forwardFirstName = (dto.forward_first_name || nameParts[0] || 'Nouveau').trim();
-    const forwardLastName = (dto.forward_last_name || nameParts.slice(1).join(' ') || 'Destinataire').trim();
-
     const [currentRecipient] = await this.db('t_recipients').where('token', token);
     if (!currentRecipient) throw new NotFoundException('Lien de signature invalide');
     if (![RecipientStatus.SIGNED, RecipientStatus.APPROVED].includes(currentRecipient.status)) {
@@ -829,7 +774,7 @@ export class EnvelopesService {
 
     const [env] = await this.db('t_envelopes').where('id_envelope', currentRecipient.id_envelope);
     if (!env) throw new NotFoundException('Enveloppe non trouvée');
-    await this.assertPublicEnvelopeAccessible(env);
+    this.assertPublicEnvelopeAccessible(env);
 
     const newToken = uuidv4();
     const nextOrder = Number(currentRecipient.signing_order || 0) + 1;
@@ -837,8 +782,8 @@ export class EnvelopesService {
     await this.db('t_recipients').insert({
       id_envelope: currentRecipient.id_envelope,
       email: dto.forward_email,
-      first_name: forwardFirstName,
-      last_name: forwardLastName,
+      first_name: dto.forward_first_name,
+      last_name: dto.forward_last_name,
       role: currentRecipient.role,
       signing_order: nextOrder,
       status: RecipientStatus.SENT,
@@ -853,7 +798,7 @@ export class EnvelopesService {
     const [sender] = await this.db('t_users').where('id_user', env.created_by);
     this.emailService.sendSignatureRequest(
       dto.forward_email,
-      `${forwardFirstName} ${forwardLastName}`,
+      `${dto.forward_first_name} ${dto.forward_last_name}`,
       env.title,
       `${sender.first_name} ${sender.last_name}`,
       newToken,
@@ -871,7 +816,7 @@ export class EnvelopesService {
 
     await this.notificationsService.create(
       env.created_by,
-      `${currentRecipient.first_name} ${currentRecipient.last_name} a renvoyé le document "${env.title}" à ${forwardFirstName} ${forwardLastName}.`,
+      `${currentRecipient.first_name} ${currentRecipient.last_name} a renvoyé le document "${env.title}" à ${dto.forward_first_name} ${dto.forward_last_name}.`,
       env.id_envelope,
     );
 
@@ -887,7 +832,7 @@ export class EnvelopesService {
     const [recipient] = await this.db('t_recipients').where('token', token);
     if (!recipient) throw new NotFoundException('Lien invalide ou expiré');
     const envelope = await this.findById(recipient.id_envelope);
-    await this.assertPublicEnvelopeAccessible(envelope);
+    this.assertPublicEnvelopeAccessible(envelope);
     // Indiquer si chaque destinataire possède un cachet
     for (const r of envelope.recipients ?? []) {
       const [u] = r.id_user
@@ -908,7 +853,7 @@ export class EnvelopesService {
     if (!recipient) throw new NotFoundException('Lien invalide ou expiré');
     const [envelope] = await this.db('t_envelopes').where('id_envelope', recipient.id_envelope);
     if (!envelope) throw new NotFoundException('Enveloppe non trouvée');
-    await this.assertPublicEnvelopeAccessible(envelope);
+    this.assertPublicEnvelopeAccessible(envelope);
     const [u] = recipient.id_user
       ? await this.db('t_users').where('id_user', recipient.id_user).select('id_user', 'stamp_path')
       : await this.db('t_users').where('email', recipient.email).select('id_user', 'stamp_path');
@@ -927,7 +872,7 @@ export class EnvelopesService {
     if (!recipient) throw new NotFoundException('Lien invalide ou expiré');
     const [envelope] = await this.db('t_envelopes').where('id_envelope', recipient.id_envelope);
     if (!envelope) throw new NotFoundException('Enveloppe non trouvée');
-    await this.assertPublicEnvelopeAccessible(envelope);
+    this.assertPublicEnvelopeAccessible(envelope);
     const [u] = recipient.id_user
       ? await this.db('t_users').where('id_user', recipient.id_user).select('id_user', 'signature_path')
       : await this.db('t_users').where('email', recipient.email).select('id_user', 'signature_path');
@@ -953,9 +898,13 @@ export class EnvelopesService {
     return { message: 'Enveloppe annulée' };
   }
 
-  async replaceDocuments(envelopeId: number, userId: number, documentIds: number[]) {
-    await this.ensureEnvelopeDocumentHistoryTable();
-
+  async replaceDocuments(
+    envelopeId: number,
+    userId: number,
+    documentIds: number[],
+    attachmentIds?: number[],
+    recipientZones?: Array<{ id_recipient: number; doc_index: number; x_ratio: number; y_ratio: number; page_number?: number }>,
+  ) {
     const [env] = await this.db('t_envelopes').where('id_envelope', envelopeId);
     if (!env) throw new NotFoundException('Enveloppe non trouvée');
     if (env.created_by !== userId) throw new ForbiddenException('Accès refusé');
@@ -968,29 +917,37 @@ export class EnvelopesService {
 
     const trx = await this.db.transaction();
     try {
-      const currentLinks = await trx('t_envelope_documents')
-        .where('id_envelope', envelopeId)
-        .select('id_document');
-
-      if (currentLinks.length > 0) {
-        const [{ maxRevision }] = await trx('t_envelope_document_history')
-          .where('id_envelope', envelopeId)
-          .max({ maxRevision: 'revision_no' });
-        const revisionNo = Number(maxRevision || 0) + 1;
-
-        for (const row of currentLinks) {
-          await trx('t_envelope_document_history').insert({
-            id_envelope: envelopeId,
-            id_document: row.id_document,
-            revision_no: revisionNo,
-            id_replaced_by: userId,
-          });
-        }
-      }
-
       await trx('t_envelope_documents').where('id_envelope', envelopeId).delete();
       for (const documentId of documentIds) {
         await trx('t_envelope_documents').insert({ id_envelope: envelopeId, id_document: documentId });
+      }
+
+      if (Array.isArray(attachmentIds)) {
+        await trx('t_envelope_attachments').where('id_envelope', envelopeId).delete();
+        for (const attachmentId of [...new Set(attachmentIds)]) {
+          await trx('t_envelope_attachments').insert({ id_envelope: envelopeId, id_document: attachmentId });
+        }
+      }
+
+      if (Array.isArray(recipientZones) && recipientZones.length > 0) {
+        for (const zone of recipientZones) {
+          const docId = documentIds[zone.doc_index];
+          if (!docId) continue;
+
+          const x = Math.min(Math.max(Number(zone.x_ratio), 0), 1);
+          const y = Math.min(Math.max(Number(zone.y_ratio), 0), 1);
+          const page = Math.max(1, Math.floor(Number(zone.page_number || 1)));
+
+          await trx('t_recipients')
+            .where('id_envelope', envelopeId)
+            .where('id_recipient', zone.id_recipient)
+            .update({
+              sig_doc_id: docId,
+              sig_x_ratio: x,
+              // Backward-compatible encoding: integer part carries page-1.
+              sig_y_ratio: (page - 1) + y,
+            });
+        }
       }
 
       if (env.status === EnvelopeStatus.REVISION) {
@@ -1003,7 +960,8 @@ export class EnvelopesService {
       await trx.commit();
       await this.logAudit(envelopeId, 'DOCUMENTS_REPLACED', userId, null, {
         document_ids: documentIds,
-        previous_document_ids: currentLinks.map((d) => d.id_document),
+        attachment_ids: Array.isArray(attachmentIds) ? attachmentIds : undefined,
+        recipient_zones: Array.isArray(recipientZones) ? recipientZones.length : 0,
       });
       return this.findById(envelopeId);
     } catch (error) {
@@ -1016,11 +974,6 @@ export class EnvelopesService {
     if (!dto.forward_email.endsWith('@cgrae.ci')) {
       throw new BadRequestException('Le destinataire doit avoir un email @cgrae.ci');
     }
-
-    const emailLocalPart = (dto.forward_email || '').split('@')[0] || 'destinataire';
-    const nameParts = emailLocalPart.split(/[._-]+/).filter(Boolean);
-    const forwardFirstName = (dto.forward_first_name || nameParts[0] || 'Nouveau').trim();
-    const forwardLastName = (dto.forward_last_name || nameParts.slice(1).join(' ') || 'Destinataire').trim();
 
     const [env] = await this.db('t_envelopes').where('id_envelope', envelopeId);
     if (!env) throw new NotFoundException('Enveloppe non trouvée');
@@ -1044,8 +997,8 @@ export class EnvelopesService {
       await trx('t_recipients').insert({
         id_envelope: envelopeId,
         email: dto.forward_email,
-        first_name: forwardFirstName,
-        last_name: forwardLastName,
+        first_name: dto.forward_first_name,
+        last_name: dto.forward_last_name,
         role: 'SIGNATORY',
         signing_order: nextOrder,
         status: RecipientStatus.SENT,
@@ -1061,7 +1014,7 @@ export class EnvelopesService {
     const [sender] = await this.db('t_users').where('id_user', userId);
     this.emailService.sendSignatureRequest(
       dto.forward_email,
-      `${forwardFirstName} ${forwardLastName}`,
+      `${dto.forward_first_name} ${dto.forward_last_name}`,
       env.title,
       `${sender.first_name} ${sender.last_name}`,
       newToken,
@@ -1093,20 +1046,6 @@ export class EnvelopesService {
       throw new BadRequestException('Cette enveloppe ne peut pas être clôturée dans son état actuel');
     }
 
-    const recipients = await this.db('t_recipients')
-      .where('id_envelope', envelopeId)
-      .whereIn('role', ['SIGNATORY', 'APPROVER', 'VIEWER']);
-    const circuitFinished = recipients.length > 0 && recipients.every(
-      (recipient) =>
-        recipient.status === RecipientStatus.SIGNED
-        || recipient.status === RecipientStatus.APPROVED
-        || recipient.status === RecipientStatus.VIEWED
-        || recipient.status === RecipientStatus.DELEGATED,
-    );
-    if (!circuitFinished) {
-      throw new BadRequestException('La clôture n\'est possible qu\'à la fin du circuit, après traitement de tous les destinataires');
-    }
-
     await this.db('t_envelopes').where('id_envelope', envelopeId).update({
       status: EnvelopeStatus.COMPLETED,
       completed_at: this.db.fn.now(),
@@ -1123,81 +1062,28 @@ export class EnvelopesService {
     if (!env) throw new NotFoundException('Enveloppe non trouvée');
     if (env.created_by !== userId) throw new ForbiddenException('Accès refusé');
     if (env.status !== EnvelopeStatus.EXPIRED) {
-      throw new BadRequestException('Seules les enveloppes expirées peuvent être remises dans le circuit');
+      throw new BadRequestException('Seule une enveloppe expirée peut être réactivée');
     }
 
-    const normalizedExpiration = this.normalizeExpirationInput(expiresAt);
-    const effectiveExpiration = this.getEffectiveExpirationDate(normalizedExpiration);
-    if (!effectiveExpiration || effectiveExpiration.getTime() <= Date.now()) {
-      throw new BadRequestException('La nouvelle date limite doit être dans le futur');
+    const normalizedExpiresAt = this.normalizeExpirationInput(expiresAt);
+    if (!normalizedExpiresAt) {
+      throw new BadRequestException('Une nouvelle date limite est obligatoire');
     }
 
-    const recipients = await this.db('t_recipients').where('id_envelope', envelopeId).orderBy('signing_order');
-    const actionableStatuses = [RecipientStatus.PENDING, RecipientStatus.SENT, RecipientStatus.VIEWED];
-
-    const toNotify = env.circuit_type === 'SEQUENTIAL'
-      ? (() => {
-          const lastProcessedOrder = Math.max(
-            ...recipients
-              .filter((r) =>
-                r.status === RecipientStatus.SIGNED
-                || r.status === RecipientStatus.APPROVED
-                || r.status === RecipientStatus.DELEGATED,
-              )
-              .map((r) => Number(r.signing_order || 0)),
-            0,
-          );
-
-          return recipients.filter((r) =>
-            Number(r.signing_order || 0) === lastProcessedOrder + 1
-            && actionableStatuses.includes(r.status)
-          );
-        })()
-      : recipients.filter((r) => actionableStatuses.includes(r.status));
-
-    if (!toNotify.length) {
-      throw new BadRequestException('Aucun destinataire en attente à relancer sur ce circuit');
-    }
-
-    await this.db('t_envelopes').where('id_envelope', envelopeId).update({
-      status: EnvelopeStatus.IN_PROGRESS,
-      expires_at: normalizedExpiration,
-      completed_at: null,
-    });
-
-    const sender = await this.db('t_users').where('id_user', userId).first();
-    const senderName = `${sender.first_name} ${sender.last_name}`;
-
-    for (const r of toNotify) {
-      await this.db('t_recipients').where('id_recipient', r.id_recipient).update({
-        status: RecipientStatus.SENT,
+    await this.db.transaction(async (trx) => {
+      await trx('t_envelopes').where('id_envelope', envelopeId).update({
+        status: EnvelopeStatus.REVISION,
+        expires_at: normalizedExpiresAt,
       });
 
-      this.emailService.sendSignatureRequest(
-        r.email,
-        `${r.first_name} ${r.last_name}`,
-        env.title,
-        senderName,
-        r.token,
-        env.message,
-      ).catch(err => console.error(`[Email] Échec relance à ${r.email}:`, err));
-
-      const [recipientUser] = await this.db('t_users').where('email', r.email).select('id_user');
-      if (recipientUser) {
-        await this.notificationsService.create(
-          recipientUser.id_user,
-          `Un parapheur expiré a été relancé : "${env.title}". Merci de le traiter avant la nouvelle échéance.`,
-          env.id_envelope,
-        );
-      }
-    }
-
-    await this.logAudit(envelopeId, 'ENVELOPE_REACTIVATED_BY_CREATOR', userId, null, {
-      expires_at: normalizedExpiration,
-      notified_recipients: toNotify.map((r) => r.email),
+      await trx('t_recipients')
+        .where('id_envelope', envelopeId)
+        .whereIn('status', [RecipientStatus.SENT, RecipientStatus.PENDING, RecipientStatus.RETURNED])
+        .update({ status: RecipientStatus.PENDING });
     });
 
-    return this.findById(envelopeId);
+    await this.logAudit(envelopeId, 'ENVELOPE_REACTIVATED', userId, null, { expires_at: normalizedExpiresAt });
+    return this.send(envelopeId, userId);
   }
 
   private async checkAndAdvanceCircuit(envelopeId: number, sender: any) {
@@ -1287,31 +1173,16 @@ export class EnvelopesService {
   }
 
   async servePublicDocument(token: string, docId: number, res: any) {
-    await this.ensureEnvelopeDocumentHistoryTable();
-    await this.ensureEnvelopeAttachmentsTable();
-
     const [recipient] = await this.db('t_recipients').where('token', token);
     if (!recipient) throw new NotFoundException('Lien invalide');
     const [envelope] = await this.db('t_envelopes').where('id_envelope', recipient.id_envelope);
     if (!envelope) throw new NotFoundException('Enveloppe non trouvée');
-    await this.assertPublicEnvelopeAccessible(envelope);
+    this.assertPublicEnvelopeAccessible(envelope);
 
     const [link] = await this.db('t_envelope_documents')
       .where('id_envelope', recipient.id_envelope)
       .where('id_document', docId);
-    if (!link) {
-      const [historyLink] = await this.db('t_envelope_document_history')
-        .where('id_envelope', recipient.id_envelope)
-        .where('id_document', docId)
-        .select('id');
-      if (!historyLink) {
-        const [attachmentLink] = await this.db('t_envelope_attachments')
-          .where('id_envelope', recipient.id_envelope)
-          .where('id_document', docId)
-          .select('id');
-        if (!attachmentLink) throw new NotFoundException('Document non associé à cette enveloppe');
-      }
-    }
+    if (!link) throw new NotFoundException('Document non associé à cette enveloppe');
 
     const [doc] = await this.db('t_documents').where('id_document', docId);
     if (!doc) throw new NotFoundException('Document non trouvé');
@@ -1330,38 +1201,6 @@ export class EnvelopesService {
     return expiresAt;
   }
 
-  private async ensureEnvelopeDocumentHistoryTable() {
-    await this.db.raw(`
-      CREATE TABLE IF NOT EXISTS t_envelope_document_history (
-        id               INT AUTO_INCREMENT PRIMARY KEY,
-        id_envelope      INT NOT NULL,
-        id_document      INT NOT NULL,
-        revision_no      INT NOT NULL,
-        id_replaced_by   INT NULL,
-        replaced_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        INDEX idx_env_revision (id_envelope, revision_no),
-        INDEX idx_env_doc (id_envelope, id_document),
-        FOREIGN KEY (id_envelope) REFERENCES t_envelopes(id_envelope) ON DELETE CASCADE,
-        FOREIGN KEY (id_document) REFERENCES t_documents(id_document) ON DELETE RESTRICT,
-        FOREIGN KEY (id_replaced_by) REFERENCES t_users(id_user) ON DELETE SET NULL
-      )
-    `);
-  }
-
-  private async ensureEnvelopeAttachmentsTable() {
-    await this.db.raw(`
-      CREATE TABLE IF NOT EXISTS t_envelope_attachments (
-        id            INT AUTO_INCREMENT PRIMARY KEY,
-        id_envelope   INT NOT NULL,
-        id_document   INT NOT NULL,
-        created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE KEY uq_envelope_attachment (id_envelope, id_document),
-        FOREIGN KEY (id_envelope) REFERENCES t_envelopes(id_envelope) ON DELETE CASCADE,
-        FOREIGN KEY (id_document) REFERENCES t_documents(id_document) ON DELETE RESTRICT
-      )
-    `);
-  }
-
   private getEffectiveExpirationDate(expiresAt?: string | Date | null): Date | null {
     if (!expiresAt) return null;
 
@@ -1377,35 +1216,12 @@ export class EnvelopesService {
     return raw;
   }
 
-  private async expireOverdueEnvelopes(): Promise<void> {
-    await this.db('t_envelopes')
-      .whereIn('status', [EnvelopeStatus.SENT, EnvelopeStatus.IN_PROGRESS, EnvelopeStatus.REVISION])
-      .whereNotNull('expires_at')
-      .andWhere('expires_at', '<', this.db.fn.now())
-      .update({ status: EnvelopeStatus.EXPIRED });
-  }
-
-  private async markEnvelopeExpiredIfNeeded(
-    envelope: { id_envelope?: number; status?: string },
-  ): Promise<void> {
-    if (!envelope.id_envelope) return;
-    if (![EnvelopeStatus.SENT, EnvelopeStatus.IN_PROGRESS, EnvelopeStatus.REVISION].includes(envelope.status as EnvelopeStatus)) {
-      return;
-    }
-
-    await this.db('t_envelopes')
-      .where('id_envelope', envelope.id_envelope)
-      .whereIn('status', [EnvelopeStatus.SENT, EnvelopeStatus.IN_PROGRESS, EnvelopeStatus.REVISION])
-      .update({ status: EnvelopeStatus.EXPIRED });
-  }
-
-  private async assertPublicEnvelopeAccessible(
-    envelope: { id_envelope?: number; expires_at?: string | Date | null; status?: string },
+  private assertPublicEnvelopeAccessible(
+    envelope: { expires_at?: string | Date | null; status?: string },
     ExceptionType: typeof NotFoundException | typeof BadRequestException = NotFoundException,
   ) {
     const effectiveExpiration = this.getEffectiveExpirationDate(envelope.expires_at);
     if (effectiveExpiration && effectiveExpiration.getTime() < Date.now()) {
-      await this.markEnvelopeExpiredIfNeeded(envelope);
       throw new ExceptionType('Ce lien de signature a expiré');
     }
 

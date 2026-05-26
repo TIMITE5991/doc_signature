@@ -134,8 +134,17 @@ export class ApiService {
     return this.http.post<Envelope>(`${this.base}/envelopes/create-and-send`, payload);
   }
 
-  replaceEnvelopeDocuments(id: number, document_ids: number[]): Observable<Envelope> {
-    return this.http.post<Envelope>(`${this.base}/envelopes/${id}/documents`, { document_ids });
+  replaceEnvelopeDocuments(
+    id: number,
+    document_ids: number[],
+    attachment_ids?: number[],
+    recipient_zones?: Array<{ id_recipient: number; doc_index: number; x_ratio: number; y_ratio: number; page_number?: number }>,
+  ): Observable<Envelope> {
+    return this.http.post<Envelope>(`${this.base}/envelopes/${id}/documents`, {
+      document_ids,
+      attachment_ids,
+      recipient_zones,
+    });
   }
 
   forwardEnvelopeByCreator(id: number, payload: { forward_email: string; forward_first_name: string; forward_last_name: string; }): Observable<Envelope> {
